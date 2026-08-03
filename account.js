@@ -7,6 +7,18 @@
   let initPromise = null;
   let libraryPromise = null;
 
+  const providerMap = Object.freeze({
+    google: "google",
+    kakao: "kakao",
+    naver: config.naverProvider || "custom:naver"
+  });
+  const enabledProviders = Object.freeze(
+    (Array.isArray(config.enabledAuthProviders)
+      ? config.enabledAuthProviders
+      : Object.keys(providerMap)
+    ).filter((provider, index, list) => providerMap[provider] && list.indexOf(provider) === index)
+  );
+
   const configured = Boolean(
     config.supabaseUrl &&
     config.supabasePublishableKey &&
@@ -18,16 +30,28 @@
     if (libraryPromise) return libraryPromise;
     libraryPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("로그인 서버 연결 파일을 불러오지 못했습니다."));
+      script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4";
+      script.dataset.supabaseClient = "true";
+      script.onload = () => {
+        if (window.supabase && window.supabase.createClient) resolve();
+        else {
+          libraryPromise = null;
+          script.remove();
+          reject(new Error("로그인 서버 연결 파일을 사용할 수 없습니다."));
+        }
+      };
+      script.onerror = () => {
+        libraryPromise = null;
+        script.remove();
+        reject(new Error("로그인 서버 연결 파일을 불러오지 못했습니다."));
+      };
       document.head.appendChild(script);
     });
     return libraryPromise;
   }
 
-  function emit() {
-    const snapshot = { configured, initialized, user: currentUser };
+  function emit(event = null) {
+    const snapshot = { configured, initialized, user: currentUser, event };
     listeners.forEach((listener) => {
       try { listener(snapshot); } catch (_) {}
     });
@@ -65,15 +89,16 @@
       initialized = true;
       emit();
 
-      client.auth.onAuthStateChange((_event, session) => {
+      client.auth.onAuthStateChange((event, session) => {
         currentUser = session ? session.user : null;
-        emit();
+        emit(event);
       });
 
       return { configured, user: currentUser };
     })().catch((error) => {
       initialized = true;
       emit();
+      initPromise = null;
       throw error;
     });
     return initPromise;
@@ -82,14 +107,12 @@
   async function signIn(provider) {
     await initialize();
     if (!client) throw new Error("로그인 서버 설정이 아직 완료되지 않았습니다.");
+    if (currentUser) return { alreadySignedIn: true };
 
-    const providers = {
-      google: "google",
-      kakao: "kakao",
-      naver: config.naverProvider || "custom:naver"
-    };
-    const selected = providers[provider];
-    if (!selected) throw new Error("지원하지 않는 로그인 방식입니다.");
+    const selected = providerMap[provider];
+    if (!selected || !enabledProviders.includes(provider)) {
+      throw new Error("아직 사용할 수 없는 로그인 방식입니다.");
+    }
 
     const redirectTo = config.siteUrl || location.href.split(/[?#]/)[0];
     const { data, error } = await client.auth.signInWithOAuth({
@@ -124,7 +147,6 @@
           ? window.crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(36).slice(2)}`
       ),
-      tested_at: result.createdAt || new Date().toISOString(),
       primary_character: idOf(ranked[0]),
       primary_score: scoreOf(ranked[0]),
       second_character: idOf(ranked[1]) || null,
@@ -164,22 +186,22 @@
     return { saved: true, data };
   }
 
-  async function listResults(limit = 100) {
+  async function listResults(limit = 500) {
     await initialize();
     if (!client || !currentUser) return [];
 
-    const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+    const safeLimit = Math.max(1, Math.min(500, Number(limit) || 500));
     const { data, error } = await client
       .from("test_results")
       .select(
         "id,tested_at,primary_character,primary_score,second_character,second_score,third_character,third_score,trait_scores,question_count,test_mode,scoring_version,question_bank_version,schema_version"
       )
       .eq("test_mode", "self")
-      .order("tested_at", { ascending: true })
+      .order("tested_at", { ascending: false })
       .limit(safeLimit);
 
     if (error) throw error;
-    return data || [];
+    return (data || []).reverse();
   }
 
   async function deleteResult(id) {
@@ -221,6 +243,7 @@
     deleteAllResults,
     subscribe,
     getDisplayName,
+    getEnabledProviders: () => [...enabledProviders],
     isConfigured: () => configured,
     getUser: () => currentUser
   });

@@ -26,7 +26,14 @@
 
   function analyze(rows, dims, dimNames) {
     const valid = (Array.isArray(rows) ? rows : [])
-      .filter((row) => row && row.trait_scores && row.tested_at)
+      .filter((row) => {
+        if (!row || !row.trait_scores || !row.tested_at) return false;
+        if (Number.isNaN(new Date(row.tested_at).getTime())) return false;
+        return dims.every((key) => {
+          const value = Number(row.trait_scores[key]);
+          return Number.isFinite(value) && value >= 0 && value <= 100;
+        });
+      })
       .sort((a, b) => new Date(a.tested_at) - new Date(b.tested_at));
 
     if (!valid.length) {

@@ -1,2 +1,9 @@
+project_id = "bible-character-test-v5-1"
+
+[auth]
+enabled = true
+site_url = "https://dhwjddls-bot.github.io/bible-character-test-v5-1/"
+additional_redirect_urls = ["https://dhwjddls-bot.github.io/bible-character-test-v5-1/"]
+
 [functions.naver-userinfo]
 verify_jwt = false

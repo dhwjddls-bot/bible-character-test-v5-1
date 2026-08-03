@@ -5,6 +5,8 @@
   let state={mode:"self",name:"",relation:"",count:32,questions:[],index:0,scores:Object.fromEntries(dims.map(d=>[d,0])),answers:[]};
   let accountState={configured:false,initialized:false,user:null};
   let currentView="boot";
+  let pendingResultSave=null;
+  let failedResultSave=null;
   const shuffle=a=>a.map(v=>[Math.random(),v]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
   const esc=s=>String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
   const hasFinalConsonant=word=>{
@@ -20,8 +22,14 @@
   };
   const characterById=id=>CHARACTERS.find(c=>c.id===id);
   const makeClientResultId=()=>window.crypto&&window.crypto.randomUUID?window.crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const authProviderMeta={
+    google:{mark:"G",label:"Google로 계속하기"},
+    naver:{mark:"N",label:"Naver로 계속하기"},
+    kakao:{mark:"K",label:"Kakao로 계속하기"}
+  };
   function accountPanel(){
     if(!accountState.configured) return "";
+    if(!accountState.initialized) return `<div class="account-panel"><div><strong>내 기록 연결 확인 중</strong><span>테스트는 바로 시작할 수 있습니다.</span></div></div>`;
     if(accountState.user){
       const name=esc(AccountService.getDisplayName());
       return `<div class="account-panel signed-in">
@@ -75,16 +83,16 @@
   }
   function showLogin(){
     currentView="login";
+    const enabledProviders=AccountService.getEnabledProviders();
     app.innerHTML=`<section class="screen setup"><div class="panel login-panel">
       <button class="back" id="back">← 돌아가기</button>
       <div class="eyebrow">MY TIMELINE</div>
       <h1 style="font-size:clamp(35px,6vw,56px)">내 변화 기록 시작하기</h1>
       <p>로그인하면 이후의 ‘나를 위한 테스트’ 결과가 시간순으로 쌓입니다. 원문 답변과 타인 테스트의 이름은 저장하지 않습니다.</p>
       <div class="social-login-list">
-        <button class="social-login google" data-provider="google"><b>G</b><span>Google로 계속하기</span></button>
-        <button class="social-login naver" data-provider="naver"><b>N</b><span>Naver로 계속하기</span></button>
-        <button class="social-login kakao" data-provider="kakao"><b>K</b><span>Kakao로 계속하기</span></button>
+        ${enabledProviders.map(provider=>{const meta=authProviderMeta[provider];return `<button class="social-login ${provider}" data-provider="${provider}"><b>${meta.mark}</b><span>${meta.label}</span></button>`}).join("")}
       </div>
+      ${enabledProviders.length?"":`<p class="record-status">현재 사용할 수 있는 로그인 방식이 없습니다. 잠시 후 다시 확인해 주세요.</p>`}
       <p class="note">로그인 제공자는 본인 확인에만 사용합니다. 소셜 서비스의 게시물이나 연락처에는 접근하지 않습니다.</p>
     </div></section>`;
     app.querySelector("#back").onclick=home;
@@ -211,16 +219,29 @@
     if(!accountState.user) return `<p class="record-status">로그인 상태에서 진행한 ‘나를 위한 테스트’는 내 변화 기록에 자동 저장됩니다.</p>`;
     return `<p class="record-status" id="record-status">검사 결과를 내 기록에 저장하는 중입니다…</p>`;
   }
-  async function persistResultIfNeeded(){
-    if(!accountState.configured||!accountState.user||!state.result||state.result.shared||state.result.history||state.mode!=="self") return;
+  function persistResultIfNeeded(){
+    if(!accountState.configured||!accountState.user||!state.result||state.result.shared||state.result.history||state.mode!=="self") return Promise.resolve();
     const status=app.querySelector("#record-status");
-    try{
-      const response=await AccountService.saveResult(state.result);
-      if(response.saved&&status) status.textContent="이 결과를 내 변화 기록에 저장했습니다.";
-      if(response.data&&response.data.id) state.result.storedId=response.data.id;
-    }catch(e){
-      if(status) status.textContent="기록을 저장하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 검사해 주세요.";
-    }
+    const resultToSave=state.result;
+    pendingResultSave=(async()=>{
+      try{
+        const response=await AccountService.saveResult(resultToSave);
+        if(!response.saved) throw new Error("로그인 상태가 종료되었습니다.");
+        failedResultSave=null;
+        if(response.saved&&status&&status.isConnected) status.textContent="이 결과를 내 변화 기록에 저장했습니다.";
+        if(response.data&&response.data.id) resultToSave.storedId=response.data.id;
+      }catch(e){
+        failedResultSave=resultToSave;
+        if(status&&status.isConnected){
+          status.innerHTML=`기록을 저장하지 못했습니다. <button class="text-button" id="retry-save">다시 저장</button>`;
+          const retry=status.querySelector("#retry-save");
+          if(retry) retry.onclick=()=>{status.textContent="검사 결과를 내 기록에 다시 저장하는 중입니다…";persistResultIfNeeded()};
+        }
+      }finally{
+        if(pendingResultSave) pendingResultSave=null;
+      }
+    })();
+    return pendingResultSave;
   }
   const formatDate=value=>{
     const date=new Date(value);
@@ -232,6 +253,12 @@
     currentView="history";
     app.innerHTML=`<section class="screen history-screen"><div class="history-loading"><div class="eyebrow">MY TIMELINE</div><h1>내 변화 기록을 불러오는 중…</h1></div></section>`;
     try{
+      if(pendingResultSave) await pendingResultSave;
+      if(failedResultSave){
+        const response=await AccountService.saveResult(failedResultSave);
+        if(!response.saved) throw new Error("기록을 다시 저장하지 못했습니다.");
+        failedResultSave=null;
+      }
       const rows=(await AccountService.listResults()).filter(row=>characterById(row.primary_character));
       renderHistory(rows);
     }catch(e){
@@ -507,14 +534,20 @@
   }
   function toast(msg){const t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2200)}
   async function startApp(){
+    const authParams=new URLSearchParams(location.search);
+    const authError=authParams.get("error_description")||authParams.get("error");
     if(window.AccountService){
-      AccountService.subscribe(snapshot=>{accountState=snapshot});
-      try{
-        const snapshot=await AccountService.initialize();
-        accountState={...accountState,...snapshot,initialized:true};
-      }catch(e){
-        accountState={...accountState,initialized:true,user:null};
-      }
+      AccountService.subscribe(snapshot=>{
+        const previousUserId=accountState.user&&accountState.user.id;
+        const nextUserId=snapshot.user&&snapshot.user.id;
+        const initializationChanged=accountState.initialized!==snapshot.initialized;
+        accountState=snapshot;
+        if(currentView==="login"&&nextUserId){toast("로그인했습니다.");home()}
+        else if(currentView==="home"&&(previousUserId!==nextUserId||initializationChanged)) home();
+        else if(snapshot.event==="SIGNED_OUT"&&!["boot","home","login","question"].includes(currentView)){
+          toast("로그인 상태가 종료되었습니다.");home();
+        }
+      });
     }
     const sharedMatch=location.hash.match(/^#result=([^&]+)$/),sharedResult=sharedMatch?decodeResultPayload(sharedMatch[1]):null;
     if(sharedResult) showResult(sharedResult);
@@ -522,6 +555,15 @@
       if(sharedMatch) clearSharedResult();
       home();
       if(sharedMatch) setTimeout(()=>toast("공유 주소가 올바르지 않아 시작 화면을 열었습니다."),50);
+    }
+    if(authError){
+      history.replaceState(null,"",`${location.pathname}${location.hash}`);
+      setTimeout(()=>toast("로그인이 취소되었거나 완료되지 않았습니다."),50);
+    }
+    if(window.AccountService){
+      AccountService.initialize().catch(()=>{
+        accountState={...accountState,initialized:true,user:null};
+      });
     }
   }
   startApp();

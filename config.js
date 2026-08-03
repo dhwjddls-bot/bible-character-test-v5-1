@@ -1,8 +1,10 @@
 window.APP_CONFIG = Object.freeze({
-  // Supabase Dashboard > Project Settings > API에서 확인할 수 있는 공개 설정입니다.
-  // service_role 키나 Google/Naver/Kakao의 Client Secret은 절대로 여기에 넣지 마세요.
-  supabaseUrl: "",
-  supabasePublishableKey: "",
+  // 브라우저에 공개해도 되는 Supabase 연결값만 사용합니다.
+  // service_role, Secret Key, OAuth Client Secret은 이 파일에 넣지 않습니다.
+  supabaseUrl: "https://qjehpzcjeqtodlqtocir.supabase.co",
+  supabasePublishableKey: "sb_publishable_EU2-jVeWXkobKFZVd4q13Q_y7IgHV_4",
+  // 설정이 끝난 로그인 제공자만 화면에 노출합니다.
+  enabledAuthProviders: ["google"],
   naverProvider: "custom:naver",
   siteUrl: "https://dhwjddls-bot.github.io/bible-character-test-v5-1/"
 });

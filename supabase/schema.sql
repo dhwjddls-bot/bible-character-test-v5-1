@@ -27,6 +27,108 @@ create table if not exists public.test_results (
 create index if not exists test_results_user_timeline_idx
   on public.test_results (user_id, tested_at desc);
 
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'test_results_text_limits'
+      and conrelid = 'public.test_results'::regclass
+  ) then
+    alter table public.test_results
+      add constraint test_results_text_limits check (
+        char_length(client_result_id) between 1 and 128
+        and char_length(scoring_version) between 1 and 30
+        and char_length(question_bank_version) between 1 and 30
+      );
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'test_results_character_contract'
+      and conrelid = 'public.test_results'::regclass
+  ) then
+    alter table public.test_results
+      add constraint test_results_character_contract check (
+        primary_character in ('david','moses','joseph','esther','peter','paul','ruth','nehemiah','daniel','jeremiah','mary','martha')
+        and (second_character is null or second_character in ('david','moses','joseph','esther','peter','paul','ruth','nehemiah','daniel','jeremiah','mary','martha'))
+        and (third_character is null or third_character in ('david','moses','joseph','esther','peter','paul','ruth','nehemiah','daniel','jeremiah','mary','martha'))
+        and second_character is not null and second_score is not null
+        and third_character is not null and third_score is not null
+        and primary_character <> second_character
+        and primary_character <> third_character
+        and second_character <> third_character
+      );
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'test_results_trait_contract'
+      and conrelid = 'public.test_results'::regclass
+  ) then
+    alter table public.test_results
+      add constraint test_results_trait_contract check (
+        octet_length(trait_scores::text) <= 2048
+        and trait_scores ?& array['courage','empathy','planning','duty','emotion','leadership','faith','adapt','calm','justice','service','reflection']
+        and (trait_scores - array['courage','empathy','planning','duty','emotion','leadership','faith','adapt','calm','justice','service','reflection']::text[]) = '{}'::jsonb
+        and jsonb_typeof(trait_scores->'courage') = 'number' and (trait_scores->>'courage')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'empathy') = 'number' and (trait_scores->>'empathy')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'planning') = 'number' and (trait_scores->>'planning')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'duty') = 'number' and (trait_scores->>'duty')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'emotion') = 'number' and (trait_scores->>'emotion')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'leadership') = 'number' and (trait_scores->>'leadership')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'faith') = 'number' and (trait_scores->>'faith')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'adapt') = 'number' and (trait_scores->>'adapt')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'calm') = 'number' and (trait_scores->>'calm')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'justice') = 'number' and (trait_scores->>'justice')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'service') = 'number' and (trait_scores->>'service')::numeric between 0 and 100
+        and jsonb_typeof(trait_scores->'reflection') = 'number' and (trait_scores->>'reflection')::numeric between 0 and 100
+      );
+  end if;
+end
+$$;
+
+create or replace function public.prepare_test_result_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  new.tested_at := now();
+  new.created_at := now();
+
+  if auth.uid() is null or new.user_id <> auth.uid() then
+    raise exception using errcode = '42501', message = 'RESULT_OWNER_MISMATCH';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(new.user_id::text, 0));
+
+  if not exists (
+    select 1 from public.test_results
+    where user_id = new.user_id and client_result_id = new.client_result_id
+  ) and (select count(*) from public.test_results where user_id = auth.uid()) >= 500 then
+    raise exception using errcode = 'P0001', message = 'RESULT_LIMIT_REACHED';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.prepare_test_result_insert() from public;
+
+drop trigger if exists prepare_test_result_insert on public.test_results;
+create trigger prepare_test_result_insert
+  before insert on public.test_results
+  for each row execute function public.prepare_test_result_insert();
+
 alter table public.test_results enable row level security;
 
 revoke all on table public.test_results from anon;
@@ -45,7 +147,7 @@ create policy "Users can insert their own test results"
   on public.test_results
   for insert
   to authenticated
-  with check ((select auth.uid()) = user_id);
+  with check ((select auth.uid()) = user_id and test_mode = 'self');
 
 drop policy if exists "Users can delete their own test results" on public.test_results;
 create policy "Users can delete their own test results"
