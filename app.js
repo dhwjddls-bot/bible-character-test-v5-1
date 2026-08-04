@@ -9,6 +9,9 @@
   let currentView="boot";
   let pendingResultSave=null;
   let failedResultSave=null;
+  let pendingShortResultUrl=null;
+  let kakaoLibraryPromise=null;
+  const shortCodePattern=/^[2-9A-HJ-NP-Z]{6}$/;
   const esc=s=>String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
   const hasFinalConsonant=word=>{
     const text=String(word||""),code=text.charCodeAt(text.length-1);
@@ -60,6 +63,27 @@
         return fallback.href;
       }catch(fallbackError){return String(location.href||"").split(/[?#]/)[0]}
     }
+  }
+  function shortResultEndpoint(){
+    const configured=window.APP_CONFIG&&typeof window.APP_CONFIG.shortResultEndpoint==="string"?window.APP_CONFIG.shortResultEndpoint.trim():"";
+    if(!configured) return "";
+    try{
+      const url=new URL(configured,location.href);
+      const local=["localhost","127.0.0.1","::1"].includes(url.hostname);
+      if(url.protocol!=="https:"&&!(url.protocol==="http:"&&local)) return "";
+      url.search="";url.hash="";
+      return url.href;
+    }catch(e){return ""}
+  }
+  function normalizeShortCode(value){
+    const code=String(value||"").trim().toUpperCase();
+    return shortCodePattern.test(code)?code:"";
+  }
+  function shortResultShareUrl(code){
+    const url=new URL(siteShareUrl(),location.href);
+    url.searchParams.set("r",normalizeShortCode(code));
+    url.hash="";
+    return url.href;
   }
   function updateSiteMetadata(){
     const url=siteShareUrl(),canonical=document.querySelector('link[rel="canonical"]'),ogUrl=document.querySelector('meta[property="og:url"]');
@@ -204,6 +228,7 @@
     const result=sharedResult||calculate(), allRanked=result.ranked,ranked=allRanked.slice(0,3), normalized=result.normalized||null, top=ranked[0],c=top.c;
     const discoveryMatch=result.discoveryMatch||(c.tier!=="discovery"?allRanked.slice(3,15).find(item=>item.c.tier==="discovery"&&top.score-item.score<=4):null)||null;
     currentView="result";
+    pendingShortResultUrl=null;
     state.result={
       ranked,
       normalized,
@@ -217,7 +242,9 @@
       questionBankVersion:result.questionBankVersion||"v5.1",
       reliability:result.reliability||null,
       discoveryMatch,
-      clientResultId:result.clientResultId||makeClientResultId()
+      clientResultId:result.clientResultId||makeClientResultId(),
+      shareCode:normalizeShortCode(result.shareCode),
+      shareExpiresAt:result.shareExpiresAt||null
     };
     const answerLabel=state.result.shared?"공유된 결과":state.result.history?"이 기록의 답":state.mode==="other"?`${state.name}님의 답`:"당신의 답";
     app.innerHTML=`<section class="screen result">
@@ -242,9 +269,16 @@
         <article class="report-card full"><h2>비슷하게 느껴질 수 있는 유형</h2><p><b>MBTI 참고:</b> ${esc(c.mbti)}</p><p><b>애니어그램 참고:</b> ${esc(c.enneagram)}</p><p class="note">성경인물에게 현대 성격유형을 공식적으로 부여한 것이 아니라, 결과를 이해하기 위한 비교입니다.</p></article>
         <article class="report-card full"><h2>두 번째와 세 번째로 닮은 인물</h2><div class="runners">${ranked.slice(1,3).map((r,i)=>`<div class="runner"><small>${i+2}번째 · ${r.score}% · ${esc(tierLabels[r.c.tier]||"성경 인물")}${r.c.named===false?" · 이름 미기록":""}</small><strong>${esc(r.c.name)}</strong><span>${r.c.traits.slice(0,3).map(esc).join(" · ")}</span><p>${esc(runnerComparison(c,r.c))}</p></div>`).join("")}</div>${discoveryMatch?`<div class="unexpected-match"><small>한 사람 더 알아보기 · ${discoveryMatch.score}%${discoveryMatch.c.named===false?" · 이름 미기록":""}</small><strong>${esc(discoveryMatch.c.name)}</strong><p>${discoveryMatch.c.named===false?`${esc(discoveryMatch.c.unnamedNote||"성경에 이름은 기록되지 않았습니다.")} `:""}${esc(discoveryMatch.c.subtitle)} 성향의 거리는 상위 결과와 가깝지만, 대표 장면과 역할은 또 다른 방향을 보여 줍니다.</p></div>`:""}</article>
       </div>
-      <div class="actions">
+      <section class="share-panel" aria-labelledby="share-title">
+        <div><small>결과 공유</small><strong id="share-title">같은 결과가 열리는 주소를 보내세요</strong><span>이름·이메일·개별 답변은 포함하지 않으며, 짧은 주소는 90일 동안 열립니다.</span><span class="share-status" id="share-status" role="status">공유 주소를 준비 중입니다…</span></div>
+        <div class="share-actions">
+          <button class="share-choice kakao-share" type="button" id="share-kakao" disabled aria-busy="true"><span aria-hidden="true">K</span>카카오톡 공유</button>
+          <button class="share-choice" type="button" id="copy-result-link" disabled aria-busy="true"><span aria-hidden="true">⧉</span>짧은 링크 복사</button>
+          <button class="share-choice" type="button" id="share" disabled aria-busy="true"><span aria-hidden="true">↗</span>다른 앱으로 공유</button>
+        </div>
+      </section>
+      <div class="actions result-actions">
         <button class="primary" id="save">전체 결과 이미지 저장</button>
-        <button class="secondary" id="share">공유하기</button>
         ${accountState.user?`<button class="secondary" id="result-history">내 변화 기록</button>`:""}
         <button class="secondary" id="restart">처음으로</button>
         <button class="secondary" id="email">이메일 문의</button>
@@ -253,7 +287,11 @@
       <p class="note">이 테스트는 자기이해를 돕는 참여형 콘텐츠이며 심리검사나 신앙 평가가 아닙니다.<br>인물 이미지는 성경의 시대·지역 배경을 참고한 창작 장면이며 실제 초상이 아닙니다.</p>
     </section>`;
     app.querySelector("#restart").onclick=()=>{buttonSound();clearSharedResult();home()};
-    app.querySelector("#share").onclick=()=>{buttonSound(540);shareResult()};
+    app.querySelector("#share").onclick=event=>{buttonSound(540);runShareAction(event.currentTarget,"다른 앱으로 공유",shareResult)};
+    app.querySelector("#copy-result-link").onclick=event=>{buttonSound(510);runShareAction(event.currentTarget,"짧은 링크 복사",copyResultLink)};
+    const kakaoShareButton=app.querySelector("#share-kakao");
+    kakaoShareButton.onclick=event=>{buttonSound(580);runShareAction(event.currentTarget,"카카오톡 공유",shareResultToKakao)};
+    prepareResultSharing();
     app.querySelector("#save").onclick=()=>{buttonSound(500);saveImage()};
     app.querySelector("#email").onclick=()=>{buttonSound(460);emailResult(c,top.score)};
     const resultHistory=app.querySelector("#result-history");
@@ -408,24 +446,33 @@
   }
   const textCard=(title,body,cls="")=>`<article class="report-card ${cls}"><h2>${esc(title)}</h2><p>${esc(body)}</p></article>`;
   const listCard=(title,items,cls="")=>`<article class="report-card ${cls}"><h2>${esc(title)}</h2><ul>${(Array.isArray(items)?items:[]).map(item=>`<li>${esc(item)}</li>`).join("")}</ul></article>`;
-  function encodeResultPayload(){
-    if(!state.result||!Array.isArray(state.result.ranked)) return "";
+  function resultPayloadObject(){
+    if(!state.result||!Array.isArray(state.result.ranked)||state.result.ranked.length!==3) return null;
     const discovery=state.result.discoveryMatch;
-    const payload={v:2,s:state.result.scoringVersion||Scoring.SCORING_VERSION,q:state.result.questionCount||null,r:state.result.ranked.slice(0,3).map(({c,score})=>[c.id,Math.round(score)]),d:discovery?[discovery.c.id,Math.round(discovery.score)]:null};
+    return {
+      v:2,
+      s:state.result.scoringVersion||Scoring.SCORING_VERSION,
+      b:state.result.questionBankVersion||state.result.scoringVersion||Scoring.SCORING_VERSION,
+      q:[16,32,48,64].includes(Number(state.result.questionCount))?Number(state.result.questionCount):32,
+      r:state.result.ranked.slice(0,3).map(({c,score})=>[c.id,Math.round(score)]),
+      d:discovery?[discovery.c.id,Math.round(discovery.score)]:null
+    };
+  }
+  function encodePayloadObject(payload){
     const bytes=new TextEncoder().encode(JSON.stringify(payload));
     let binary="";
     bytes.forEach(byte=>binary+=String.fromCharCode(byte));
     return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
   }
-  function decodeResultPayload(raw){
+  function encodeResultPayload(){
+    const payload=resultPayloadObject();
+    return payload?encodePayloadObject(payload):"";
+  }
+  function decodeResultObject(payload){
     try{
-      if(!raw||raw.length>1200||!/^[A-Za-z0-9_-]+$/.test(raw)) return null;
-      const normalizedRaw=raw.replace(/-/g,"+").replace(/_/g,"/");
-      const padded=normalizedRaw+"=".repeat((4-normalizedRaw.length%4)%4);
-      const binary=atob(padded),bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
-      const payload=JSON.parse(new TextDecoder().decode(bytes));
       if(!payload||typeof payload!=="object"||![1,2].includes(payload.v)||!Array.isArray(payload.r)||payload.r.length!==3) return null;
       if(payload.v===2&&(![16,32,48,64].includes(payload.q)||typeof payload.s!=="string"||!/^[A-Za-z0-9._-]{1,30}$/.test(payload.s))) return null;
+      if(payload.v===2&&payload.b!=null&&(typeof payload.b!=="string"||!/^[A-Za-z0-9._-]{1,30}$/.test(payload.b))) return null;
       const known=new Map(CHARACTERS.map(c=>[c.id,c])), seen=new Set(), ranked=[];
       for(const row of payload.r){
         if(!Array.isArray(row)||row.length!==2||typeof row[0]!=="string"||!Number.isInteger(row[1])||row[1]<0||row[1]>100||seen.has(row[0])||!known.has(row[0])) return null;
@@ -439,30 +486,215 @@
         if(ranked[0].c.tier==="discovery"||discoveryCharacter.tier!=="discovery"||payload.d[1]>ranked[2].score||ranked[0].score-payload.d[1]>4) return null;
         discoveryMatch={c:discoveryCharacter,score:payload.d[1]};
       }
-      return {ranked,normalized:null,createdAt:null,shared:true,discoveryMatch,scoringVersion:payload.v===2?payload.s:"v5.1",questionCount:payload.v===2?payload.q:null};
+      return {ranked,normalized:null,createdAt:null,shared:true,discoveryMatch,scoringVersion:payload.v===2?payload.s:"v5.1",questionBankVersion:payload.v===2?(payload.b||payload.s):"v5.1",questionCount:payload.v===2?payload.q:null};
+    }catch(e){return null}
+  }
+  function decodeResultPayload(raw){
+    try{
+      if(!raw||raw.length>1200||!/^[A-Za-z0-9_-]+$/.test(raw)) return null;
+      const normalizedRaw=raw.replace(/-/g,"+").replace(/_/g,"/");
+      const padded=normalizedRaw+"=".repeat((4-normalizedRaw.length%4)%4);
+      const binary=atob(padded),bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
+      return decodeResultObject(JSON.parse(new TextDecoder().decode(bytes)));
     }catch(e){return null}
   }
   function resultShareUrl(){
+    if(state.result&&state.result.shareCode) return shortResultShareUrl(state.result.shareCode);
     const encoded=encodeResultPayload(),url=new URL(siteShareUrl(),location.href);
     url.hash=encoded?`result=${encoded}`:"";
     return url.href;
   }
+  function shortResultHeaders(json=false){
+    const config=window.APP_CONFIG||{},headers={Accept:"application/json"};
+    if(json) headers["Content-Type"]="application/json";
+    if(typeof config.supabasePublishableKey==="string"&&config.supabasePublishableKey.trim()) headers.apikey=config.supabasePublishableKey.trim();
+    return headers;
+  }
+  async function requestShortResult(url,options={}){
+    const controller=typeof AbortController==="function"?new AbortController():null;
+    const timeout=controller?setTimeout(()=>controller.abort(),8000):null;
+    try{
+      const response=await fetch(url,{...options,signal:controller?controller.signal:undefined});
+      const raw=await response.text();
+      if(raw.length>24000) throw new Error("공유 서버 응답이 너무 큽니다.");
+      let data={};
+      if(raw){try{data=JSON.parse(raw)}catch(e){throw new Error("공유 서버 응답을 읽을 수 없습니다.")}}
+      if(!response.ok){
+        const error=new Error(data&&data.error?String(data.error):`공유 서버 오류 (${response.status})`);
+        error.status=response.status;
+        error.retryAfter=data&&data.retryAfter;
+        throw error;
+      }
+      return data;
+    }finally{if(timeout) clearTimeout(timeout)}
+  }
+  async function createShortResultUrl(){
+    const endpoint=shortResultEndpoint(),payload=resultPayloadObject();
+    if(!endpoint||!payload) throw new Error("짧은 결과 주소를 사용할 수 없습니다.");
+    const resultId=state.result&&state.result.clientResultId;
+    const data=await requestShortResult(endpoint,{method:"POST",headers:shortResultHeaders(true),body:JSON.stringify({payload})});
+    const code=normalizeShortCode(data&&data.code);
+    if(!code) throw new Error("공유 서버가 올바른 코드를 보내지 않았습니다.");
+    if(state.result&&state.result.clientResultId===resultId){
+      state.result.shareCode=code;
+      state.result.shareExpiresAt=data.expiresAt||null;
+    }
+    return {url:shortResultShareUrl(code),short:true};
+  }
+  async function loadShortResult(code){
+    const normalizedCode=normalizeShortCode(code),endpoint=shortResultEndpoint();
+    if(!normalizedCode||!endpoint) throw new Error("짧은 결과 주소를 사용할 수 없습니다.");
+    const url=new URL(endpoint,location.href);
+    url.searchParams.set("code",normalizedCode);
+    const data=await requestShortResult(url.href,{method:"GET",headers:shortResultHeaders()});
+    const decoded=decodeResultObject(data&&data.payload);
+    if(!decoded) throw new Error("공유된 결과가 올바르지 않습니다.");
+    return {...decoded,shareCode:normalizedCode,shareExpiresAt:data.expiresAt||null};
+  }
+  function ensureResultShareTarget(){
+    if(state.result&&state.result.shareCode) return Promise.resolve({url:shortResultShareUrl(state.result.shareCode),short:true});
+    if(pendingShortResultUrl) return pendingShortResultUrl;
+    if(!shortResultEndpoint()) return Promise.resolve({url:resultShareUrl(),short:false});
+    pendingShortResultUrl=createShortResultUrl().catch(error=>{
+      console.warn("짧은 결과 주소 생성 실패",error);
+      pendingShortResultUrl=null;
+      return {url:resultShareUrl(),short:false,error};
+    });
+    return pendingShortResultUrl;
+  }
+  function enablePreparedShareButton(button){
+    if(!button||!button.isConnected) return;
+    button.disabled=false;
+    button.removeAttribute("aria-busy");
+  }
+  function prepareResultSharing(){
+    const panel=app.querySelector(".share-panel"),status=app.querySelector("#share-status"),nativeButton=app.querySelector("#share"),copyButton=app.querySelector("#copy-result-link"),kakaoButton=app.querySelector("#share-kakao");
+    let started=false;
+    const kakaoPromise=loadKakaoLibrary().then(Kakao=>({ok:true,Kakao}),error=>{console.warn("카카오 공유 준비 실패",error);return {ok:false,error}});
+    const startPreparing=()=>{
+      if(started) return;
+      started=true;
+      if(status&&status.isConnected) status.textContent="공유 주소를 준비 중입니다…";
+      const targetPromise=ensureResultShareTarget();
+      targetPromise.then(target=>{
+        enablePreparedShareButton(nativeButton);
+        enablePreparedShareButton(copyButton);
+        if(status&&status.isConnected) status.textContent=target.short?"짧은 결과 주소가 준비되었습니다.":"기존 결과 주소로 공유할 수 있습니다.";
+      });
+      Promise.all([targetPromise,kakaoPromise]).then(([,kakao])=>{
+        if(kakao.ok){enablePreparedShareButton(kakaoButton);return}
+        if(kakaoButton&&kakaoButton.isConnected){kakaoButton.title="카카오 공유를 불러오지 못했습니다. 링크 복사를 이용해 주세요.";kakaoButton.setAttribute("aria-label",kakaoButton.title)}
+        if(status&&status.isConnected) status.textContent="결과 주소는 준비되었습니다. 카카오를 열 수 없으면 링크 복사를 이용해 주세요.";
+      });
+    };
+    if(!panel||typeof IntersectionObserver!=="function"){startPreparing();return}
+    if(status&&status.isConnected) status.textContent="공유 도구가 보이면 주소를 준비합니다…";
+    const observer=new IntersectionObserver(entries=>{
+      if(entries.some(entry=>entry.isIntersecting)){observer.disconnect();startPreparing()}
+    },{rootMargin:"320px 0px"});
+    observer.observe(panel);
+  }
   function clearSharedResult(){
-    if(location.hash.startsWith("#result=")) history.replaceState(null,"",`${location.pathname}${location.search}`);
+    const url=new URL(location.href);
+    const hadShortResult=url.searchParams.has("r"),hadHash=url.hash.startsWith("#result=");
+    if(!hadShortResult&&!hadHash) return;
+    url.searchParams.delete("r");
+    if(hadHash) url.hash="";
+    history.replaceState(null,"",`${url.pathname}${url.search}${url.hash}`);
+  }
+  function resultShareDetails(){
+    const {c,score}=state.result.ranked[0];
+    const who=state.result.shared?"공유된":state.result.mode==="other"?"떠올린 사람의":"나의";
+    return {c,score,text:`${who} 성경인물 성향 테스트 결과는 ${c.name} (${score}%)입니다. — ${c.subtitle}`};
+  }
+  async function runShareAction(button,label,action){
+    if(!button||button.disabled) return;
+    const original=button.innerHTML;
+    button.disabled=true;button.setAttribute("aria-busy","true");button.textContent="주소 준비 중…";
+    try{await action()}
+    catch(error){console.error(error);toast("공유를 준비하지 못했습니다. 다시 시도해 주세요.")}
+    finally{button.disabled=false;button.removeAttribute("aria-busy");button.innerHTML=original||esc(label)}
   }
   async function shareResult(){
     if(!state.result) return;
-    const {c,score}=state.result.ranked[0];
-    const who=state.result.shared?"공유된":state.result.mode==="other"?"떠올린 사람의":"나의";
-    const text=`${who} 성경인물 성향 테스트 결과는 ${c.name} (${score}%)입니다. — ${c.subtitle}`;
-    const url=resultShareUrl();
+    const {text}=resultShareDetails(),target=await ensureResultShareTarget(),url=target.url;
     try{
       if(navigator.share) await navigator.share({title:"성경인물 성향 테스트",text,url});
-      else {await copyText(`${text}\n${url}`);toast("같은 결과가 열리는 주소를 복사했습니다.");}
+      else {await copyText(`${text}\n${url}`);toast(target.short?"짧은 결과 주소를 복사했습니다.":"같은 결과가 열리는 주소를 복사했습니다.");}
     }catch(e){
       if(e&&e.name==="AbortError") return;
-      try{await copyText(`${text}\n${url}`);toast("같은 결과가 열리는 주소를 복사했습니다.");}
+      try{await copyText(`${text}\n${url}`);toast(target.short?"짧은 결과 주소를 복사했습니다.":"같은 결과가 열리는 주소를 복사했습니다.");}
       catch(copyError){toast("결과 주소를 복사하지 못했습니다. 다시 시도해 주세요.");}
+    }
+  }
+  async function copyResultLink(){
+    if(!state.result) return;
+    const target=await ensureResultShareTarget();
+    await copyText(target.url);
+    toast(target.short?"짧은 결과 주소를 복사했습니다.":"짧은 주소를 만들지 못해 기존 결과 주소를 복사했습니다.");
+  }
+  function kakaoJavaScriptKey(){
+    const key=window.APP_CONFIG&&typeof window.APP_CONFIG.kakaoJavaScriptKey==="string"?window.APP_CONFIG.kakaoJavaScriptKey.trim():"";
+    return key;
+  }
+  function loadKakaoLibrary(){
+    const key=kakaoJavaScriptKey();
+    if(!key) return Promise.reject(new Error("카카오 JavaScript 키가 설정되지 않았습니다."));
+    if(window.Kakao){
+      try{
+        if(!window.Kakao.isInitialized()) window.Kakao.init(key);
+        if(!window.Kakao.Share) throw new Error("카카오 공유 모듈을 사용할 수 없습니다.");
+        return Promise.resolve(window.Kakao);
+      }catch(error){return Promise.reject(error)}
+    }
+    if(kakaoLibraryPromise) return kakaoLibraryPromise;
+    kakaoLibraryPromise=new Promise((resolve,reject)=>{
+      const script=document.createElement("script");
+      const timeout=setTimeout(()=>{kakaoLibraryPromise=null;reject(new Error("카카오 공유 기능 준비 시간이 초과되었습니다."))},8000);
+      script.src="https://t1.kakaocdn.net/kakao_js_sdk/2.8.1/kakao.min.js";
+      script.integrity="sha384-OL+ylM/iuPLtW5U3XcvLSGhE8JzReKDank5InqlHGWPhb4140/yrBw0bg0y7+C9J";
+      script.crossOrigin="anonymous";
+      script.dataset.kakaoSdk="true";
+      script.onload=()=>{
+        clearTimeout(timeout);
+        if(!window.Kakao){kakaoLibraryPromise=null;reject(new Error("카카오 공유 기능을 불러오지 못했습니다."));return}
+        try{
+          if(!window.Kakao.isInitialized()) window.Kakao.init(key);
+          if(!window.Kakao.Share) throw new Error("카카오 공유 모듈을 사용할 수 없습니다.");
+          resolve(window.Kakao)
+        }
+        catch(error){kakaoLibraryPromise=null;reject(error)}
+      };
+      script.onerror=()=>{clearTimeout(timeout);kakaoLibraryPromise=null;script.remove();reject(new Error("카카오 공유 기능을 불러오지 못했습니다."))};
+      document.head.appendChild(script);
+    });
+    return kakaoLibraryPromise;
+  }
+  async function shareResultToKakao(){
+    if(!state.result) return;
+    const target=await ensureResultShareTarget(),{c,score}=resultShareDetails();
+    try{
+      const Kakao=await loadKakaoLibrary();
+      const imageUrl=new URL("og.png",siteShareUrl()).href;
+      const subject=state.result.shared?"이 결과는":state.result.mode==="other"?"떠올린 사람은":"나는";
+      await Kakao.Share.sendDefault({
+        objectType:"feed",
+        content:{
+          title:`${subject} ${c.name}과 ${score}% 닮았어요`,
+          description:c.subtitle,
+          imageUrl,
+          link:{mobileWebUrl:target.url,webUrl:target.url}
+        },
+        buttons:[
+          {title:"결과 자세히 보기",link:{mobileWebUrl:target.url,webUrl:target.url}},
+          {title:"나도 테스트하기",link:{mobileWebUrl:siteShareUrl(),webUrl:siteShareUrl()}}
+        ]
+      });
+      if(!target.short) setTimeout(()=>toast("짧은 주소 대신 기존 결과 주소로 공유했습니다."),100);
+    }catch(error){
+      console.warn("카카오톡 공유 실패",error);
+      await copyText(target.url);
+      toast("카카오톡 공유를 열지 못해 결과 주소를 복사했습니다.");
     }
   }
   async function copyText(text){
@@ -604,6 +836,10 @@
     }
   }
   function toast(msg){const t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2200)}
+  function showSharedResultLoading(){
+    currentView="shared-loading";
+    app.innerHTML=`<section class="shared-result-loading" role="status"><span class="loading-ring" aria-hidden="true"></span><h1>공유 결과를 여는 중입니다</h1><p>같은 결과 화면을 안전하게 불러오고 있어요.</p></section>`;
+  }
   async function startApp(){
     updateSiteMetadata();
     const authParams=new URLSearchParams(location.search);
@@ -621,12 +857,28 @@
         }
       });
     }
-    const sharedMatch=location.hash.match(/^#result=([^&]+)$/),sharedResult=sharedMatch?decodeResultPayload(sharedMatch[1]):null;
-    if(sharedResult) showResult(sharedResult);
-    else {
-      if(sharedMatch) clearSharedResult();
+    const shortCodeRaw=authParams.get("r"),shortRequested=shortCodeRaw!==null,shortCode=normalizeShortCode(shortCodeRaw);
+    const sharedMatch=location.hash.match(/^#result=([^&]+)$/),hashSharedResult=sharedMatch?decodeResultPayload(sharedMatch[1]):null;
+    let shortSharedResult=null,shortLoadError=null;
+    if(shortRequested){
+      if(shortCode&&shortResultEndpoint()){
+        showSharedResultLoading();
+        try{shortSharedResult=await loadShortResult(shortCode)}catch(error){shortLoadError=error}
+      }else shortLoadError=new Error("invalid_short_result");
+    }
+    if(shortSharedResult) showResult(shortSharedResult);
+    else if(hashSharedResult){
+      if(shortRequested){
+        const url=new URL(location.href);url.searchParams.delete("r");history.replaceState(null,"",`${url.pathname}${url.search}${url.hash}`);
+      }
+      showResult(hashSharedResult);
+    }else {
+      if(shortRequested||sharedMatch) clearSharedResult();
       home();
-      if(sharedMatch) setTimeout(()=>toast("공유 주소가 올바르지 않아 시작 화면을 열었습니다."),50);
+      if(shortLoadError){
+        const message=shortLoadError.status===404?"공유 결과를 찾을 수 없거나 주소가 만료되어 시작 화면을 열었습니다.":"공유 결과를 불러오지 못해 시작 화면을 열었습니다.";
+        setTimeout(()=>toast(message),50);
+      }else if(sharedMatch) setTimeout(()=>toast("공유 주소가 올바르지 않아 시작 화면을 열었습니다."),50);
     }
     if(authError){
       history.replaceState(null,"",`${location.pathname}${location.hash}`);
@@ -639,7 +891,11 @@
     }
   }
   if(window.__BIBLE_APP_TEST__){
-    window.__BIBLE_APP_TEST_HOOKS__={decodeResultPayload,escapeHtml:esc,characterSceneStyle,textCard,listCard};
+    window.__BIBLE_APP_TEST_HOOKS__={
+      decodeResultPayload,decodeResultObject,normalizeShortCode,escapeHtml:esc,characterSceneStyle,textCard,listCard,
+      ensureResultShareTarget,
+      setResultForTest:result=>{state.result=result;pendingShortResultUrl=null}
+    };
     return;
   }
   startApp();

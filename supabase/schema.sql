@@ -1,5 +1,6 @@
 -- 성경인물 성향 테스트: 개인 검사 기록
 -- Supabase SQL Editor에서 한 번 실행합니다.
+-- 짧은 결과 링크는 이 파일 실행 후 migrations/202608040001_create_shared_results.sql을 실행합니다.
 
 create extension if not exists pgcrypto;
 

@@ -18,12 +18,16 @@
 
 1. Supabase에서 새 프로젝트를 만듭니다.
 2. SQL Editor에서 `supabase/schema.sql`을 실행합니다.
-   - 12인 버전의 테이블을 이미 만든 프로젝트는 대신 `supabase/migrations/20260804_expand_character_catalog.sql`을 한 번 실행해 100인 결과 저장을 허용합니다.
+   - 12인 버전의 테이블을 이미 만든 프로젝트는 대신 `supabase/migrations/202608040000_expand_character_catalog.sql`을 한 번 실행해 100인 결과 저장을 허용합니다.
+   - 짧은 결과 링크를 사용하려면 이어서 `supabase/migrations/202608040001_create_shared_results.sql`을 실행합니다.
 3. Authentication > URL Configuration에서 다음 값을 등록합니다.
-   - Site URL: `https://dhwjddls-bot.github.io/bible-character-test-v5-1/`
-   - Redirect URL: `https://dhwjddls-bot.github.io/bible-character-test-v5-1/`
+   - Site URL: `https://dhwjddls-bot.github.io/`
+   - Redirect URL: `https://dhwjddls-bot.github.io/`
+   - 이전 주소 호환 Redirect URL: `https://dhwjddls-bot.github.io/bible-character-test-v5-1/`
 4. Project Settings > API의 Project URL과 Publishable Key를 `config.js`에 입력합니다.
 5. `service_role` 키는 웹 파일이나 GitHub에 넣지 않습니다.
+
+짧은 결과 링크의 Edge Function 비밀값, 배포 순서와 시험 방법은 [SHORT_RESULT_LINKS.md](SHORT_RESULT_LINKS.md)를 따릅니다.
 
 ## 2. Google
 

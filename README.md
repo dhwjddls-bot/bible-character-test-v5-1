@@ -1,10 +1,12 @@
-# 성경인물 성향 테스트 V5.2 · 100인 확장판
+# 성경인물 성향 테스트 V5.3 · 100인 확장판
 
 설치 없이 실행되며 GitHub Pages에 올릴 수 있는 정적 웹앱입니다. 검사는 서버 설정 없이도 동작하고, 선택 사항인 로그인·기록 기능은 Supabase를 연결하면 활성화됩니다.
 
+공개 사이트: `https://dhwjddls-bot.github.io/`
+
 ## 실행 방법
 
-1. `bible-character-test-v5.1.zip`의 압축을 풉니다.
+1. `bible-character-test-v5.3.zip`의 압축을 풉니다.
 2. 폴더 안의 `index.html`을 더블클릭합니다.
 3. Chrome, Edge, Safari, Firefox 등 최신 브라우저에서 테스트를 진행합니다.
 
@@ -31,7 +33,7 @@ bible-character-test-v5.1/
 ├─ supabase/
 │  ├─ schema.sql           사용자별 검사 기록, 100인 목록과 보안 규칙
 │  ├─ migrations/          기존 서비스의 데이터베이스 갱신 파일
-│  └─ functions/           Naver 프로필 형식 변환 함수
+│  └─ functions/           Naver 프로필 변환·짧은 결과 링크 함수
 └─ docs/
    ├─ ACCOUNT_SETUP.md     Google·Naver·Kakao 설정 방법
    └─ CUSTOM_DOMAIN.md     원하는 주소 연결 방법
@@ -44,7 +46,7 @@ bible-character-test-v5.1/
 - 문의 버튼은 결과 요약이 포함된 새 메일 작성 화면을 엽니다. 운영 이메일을 정했다면 `app.js`의 `mailto:` 뒤에 주소를 넣을 수 있습니다.
 - 결과 화면의 MBTI와 애니어그램 표시는 이해를 돕는 참고 정보이며 공식 판정이 아닙니다.
 - 결과 이미지 저장은 대표 장면뿐 아니라 상세 결과 전체를 긴 PNG 한 장으로 저장합니다.
-- 공유 주소에는 결과 인물과 점수만 들어가며 원문 답변, 이메일, 타인 이름은 포함하지 않습니다.
+- 결과 공유는 90일 동안 열리는 6자리 짧은 주소를 사용하며, 결과 인물과 점수만 저장합니다. 원문 답변, 이메일, 타인 이름은 포함하지 않습니다.
 - 첫 화면과 로그인 화면의 ‘테스트 공유하기’는 시작 주소를, 결과 화면의 ‘공유하기’는 같은 결과가 열리는 주소를 공유합니다.
 
 ## 로그인·기록 기능
@@ -58,7 +60,7 @@ Google·Naver·Kakao 로그인과 시간선 기록을 사용하려면 [docs/ACCO
 - 2회 이상 기록되면 성향 점수 변화 그래프를 제공하고, 3회 미만은 추세가 아닌 최근 관찰로 안내합니다.
 - 100인 채점 기준과 이전 12인 채점 기준은 변화 그래프에서 섞지 않습니다.
 
-기존 12인 버전의 데이터베이스를 이미 만들었다면 `supabase/migrations/20260804_expand_character_catalog.sql`을 SQL Editor에서 한 번 실행해야 새 인물 결과도 저장됩니다.
+기존 12인 버전의 데이터베이스를 이미 만들었다면 `supabase/migrations/202608040000_expand_character_catalog.sql`을 SQL Editor에서 한 번 실행해야 새 인물 결과도 저장됩니다.
 
 ## 참고
 

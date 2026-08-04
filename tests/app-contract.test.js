@@ -12,9 +12,13 @@ const characters=[
   {id:"gamma",tier:"discovery"},
   {id:"delta",tier:"discovery"}
 ];
+let shortResultFetchCalls=0;
 const context={
   console,TextEncoder,TextDecoder,URL,btoa,atob,
   document:{getElementById:()=>null},
+  location:{href:"https://example.test/",search:"",hash:"",pathname:"/"},
+  APP_CONFIG:{siteUrl:"https://example.test/",shortResultEndpoint:"https://api.example.test/functions/v1/shared-result"},
+  fetch:async()=>{shortResultFetchCalls++;throw new Error("기존 짧은 주소에서는 API를 다시 호출하면 안 됩니다.")},
   CHARACTERS:characters,
   __BIBLE_APP_TEST__:true,
   BibleScoring:Scoring
@@ -23,7 +27,7 @@ context.window=context;
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,"..","app.js"),"utf8"),context,{filename:"app.js"});
 
-const {decodeResultPayload,escapeHtml,characterSceneStyle,textCard,listCard}=context.__BIBLE_APP_TEST_HOOKS__;
+const {decodeResultPayload,decodeResultObject,normalizeShortCode,ensureResultShareTarget,setResultForTest,escapeHtml,characterSceneStyle,textCard,listCard}=context.__BIBLE_APP_TEST_HOOKS__;
 const encode=value=>Buffer.from(JSON.stringify(value),"utf8").toString("base64url");
 
 const v1=decodeResultPayload(encode({v:1,r:[["alpha",90],["beta",86],["gamma",82]]}));
@@ -35,6 +39,18 @@ const v2=decodeResultPayload(encode({v:2,s:"v5.2-100",q:16,r:[["alpha",90],["bet
 assert.ok(v2&&v2.shared,"v2 결과 링크를 읽음");
 assert.equal(v2.questionCount,16);
 assert.equal(v2.discoveryMatch.c.id,"delta");
+assert.equal(v2.questionBankVersion,"v5.2-100","기존 v2 링크는 채점 버전을 문항 버전 fallback으로 사용");
+
+const edgePayload=decodeResultObject({v:2,s:"v5.2-100",b:"v5.1",q:32,r:[["alpha",88],["beta",86],["gamma",84]],d:["delta",84]});
+assert.ok(edgePayload&&edgePayload.shared,"Edge Function payload 객체를 읽음");
+assert.equal(edgePayload.questionBankVersion,"v5.1");
+assert.equal(normalizeShortCode("7k3p2a"),"7K3P2A","짧은 코드를 대문자로 정규화");
+assert.equal(normalizeShortCode("O1I0AA"),"","혼동 문자가 든 코드를 거부");
+
+setResultForTest({shareCode:"7K3P2A"});
+const reusedShortTarget=ensureResultShareTarget();
+assert.equal(shortResultFetchCalls,0,"짧은 공유 결과를 화면에서 준비할 때 POST를 만들지 않음");
+reusedShortTarget.then(target=>assert.equal(target.url,"https://example.test/?r=7K3P2A","기존 6자리 주소를 그대로 재사용")).catch(error=>setImmediate(()=>{throw error}));
 
 const invalidPayloads=[
   {v:2,s:"v5.2-100",r:[["alpha",90],["beta",87],["gamma",86]],d:null},

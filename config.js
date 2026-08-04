@@ -6,5 +6,8 @@ window.APP_CONFIG = Object.freeze({
   // 설정이 끝난 로그인 제공자만 화면에 노출합니다.
   enabledAuthProviders: ["google"],
   naverProvider: "custom:naver",
-  siteUrl: "https://dhwjddls-bot.github.io/bible-character-test-v5-1/"
+  // Kakao JavaScript 키는 브라우저용 공개 키입니다. Admin 키나 Client Secret은 넣지 않습니다.
+  kakaoJavaScriptKey: "8d06efc3736e9ab0a574fc5fb77bc120",
+  shortResultEndpoint: "https://qjehpzcjeqtodlqtocir.supabase.co/functions/v1/shared-result",
+  siteUrl: "https://dhwjddls-bot.github.io/"
 });
