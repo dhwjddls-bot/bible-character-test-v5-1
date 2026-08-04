@@ -27,7 +27,7 @@ context.window=context;
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,"..","app.js"),"utf8"),context,{filename:"app.js"});
 
-const {decodeResultPayload,decodeResultObject,normalizeShortCode,ensureResultShareTarget,setResultForTest,escapeHtml,characterSceneStyle,textCard,listCard}=context.__BIBLE_APP_TEST_HOOKS__;
+const {decodeResultPayload,decodeResultObject,normalizeShortCode,ensureResultShareTarget,setResultForTest,escapeHtml,characterSceneStyle,textCard,listCard,saveAnswerAt,previousQuestionIndex}=context.__BIBLE_APP_TEST_HOOKS__;
 const encode=value=>Buffer.from(JSON.stringify(value),"utf8").toString("base64url");
 
 const v1=decodeResultPayload(encode({v:1,r:[["alpha",90],["beta",86],["gamma",82]]}));
@@ -74,5 +74,15 @@ assert.ok(escaped.includes("&lt;img")&&escaped.includes("&amp;"),"HTML 특수문
 assert.ok(!textCard("제목",`<img src=x onerror="alert(1)">`).includes("<img"),"결과 본문 카드의 데이터 escape");
 assert.ok(!listCard("목록",[`<svg onload="alert(1)">`]).includes("<svg"),"결과 목록 카드의 데이터 escape");
 assert.equal(characterSceneStyle({atlas:"1');color:red;/*",pos:"0% 0%;color:red"}),"background-image:url('assets/characters-1.png');background-position:0% 0%","장면 style 값 allowlist 적용");
+
+const answerQuestion={text:"약속 시간이 다가오는데 준비가 덜 됐습니다.",options:[{text:"정해진 시간에 맞춘다."},{text:"완성도를 높인 뒤 알린다."}]};
+const answerResponses=[],answerSummaries=[];
+saveAnswerAt(0,answerQuestion,0,answerResponses,answerSummaries);
+saveAnswerAt(0,answerQuestion,1,answerResponses,answerSummaries);
+assert.equal(answerResponses.length,1,"이전 문항의 답을 바꿔도 응답이 중복되지 않음");
+assert.equal(answerResponses[0].optionIndex,1,"이전 문항에서 고른 새 답으로 교체됨");
+assert.equal(answerSummaries[0].answer,answerQuestion.options[1].text,"결과용 답변 요약도 함께 교체됨");
+assert.equal(previousQuestionIndex(5),4,"이전 문항 번호로 이동");
+assert.equal(previousQuestionIndex(0),0,"첫 문항보다 앞으로 이동하지 않음");
 
 console.log("app-contract.test.js: 공유 역호환·payload 검증·escape 검사를 통과했습니다.");

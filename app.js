@@ -132,6 +132,12 @@
   function selectQuestions(count){
     return Scoring.selectQuestions(QUESTIONS,count,{dimensions:dims});
   }
+  function saveAnswerAt(questionIndex,question,optionIndex,responses=state.responses,answers=state.answers){
+    const option=question.options[optionIndex];
+    responses[questionIndex]={question,optionIndex};
+    answers[questionIndex]={question:question.text,answer:option.text};
+  }
+  const previousQuestionIndex=index=>Math.max(0,index-1);
   function home(){
     currentView="home";
     app.innerHTML=`<section class="screen hero"><div class="intro">
@@ -206,16 +212,23 @@
   }
   function question(){
     currentView="question";
-    const q=state.questions[state.index], subject=state.mode==="other"?`${esc(state.name)}님을 떠올리며`:"지금의 나를 떠올리며";
+    const q=state.questions[state.index],savedResponse=state.responses[state.index],subject=state.mode==="other"?`${esc(state.name)}님을 떠올리며`:"지금의 나를 떠올리며";
     app.innerHTML=`<section class="screen">
       <div class="test-head"><div class="progress-row"><span>${subject}</span><span>${state.index+1} / ${state.count}</span></div><div class="progress"><i style="width:${(state.index/state.count)*100}%"></i></div></div>
-      <div class="question-wrap"><div class="category">${esc(q.category)}</div><h1 class="question">${esc(q.text)}</h1>
-      <div class="options">${q.options.map((o,i)=>`<button class="option" data-i="${i}"><b>${String.fromCharCode(65+i)}</b><span>${esc(o.text)}</span></button>`).join("")}</div></div>
+      <div class="question-wrap">
+      ${state.index>0?`<button class="question-back" id="previous-question" type="button"><span aria-hidden="true">←</span> 이전 문항</button>`:""}
+      <div class="category">${esc(q.category)}</div><h1 class="question">${esc(q.text)}</h1>
+      <div class="options">${q.options.map((o,i)=>`<button class="option ${savedResponse&&savedResponse.optionIndex===i?"selected":""}" data-i="${i}" aria-pressed="${savedResponse&&savedResponse.optionIndex===i?"true":"false"}"><b>${String.fromCharCode(65+i)}</b><span>${esc(o.text)}</span></button>`).join("")}</div></div>
     </section>`;
+    const previousButton=app.querySelector("#previous-question");
+    if(previousButton) previousButton.onclick=()=>{
+      buttonSound(380);
+      state.index=previousQuestionIndex(state.index);
+      question();
+    };
     app.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{
-      buttonSound(460+(+b.dataset.i*80));const optionIndex=+b.dataset.i,o=q.options[optionIndex];
-      state.responses.push({question:q,optionIndex});
-      state.answers.push({question:q.text,answer:o.text});state.index++;
+      buttonSound(460+(+b.dataset.i*80));const optionIndex=+b.dataset.i;
+      saveAnswerAt(state.index,q,optionIndex);state.index++;
       state.index<state.count?question():showResult();
     });
   }
@@ -893,7 +906,7 @@
   if(window.__BIBLE_APP_TEST__){
     window.__BIBLE_APP_TEST_HOOKS__={
       decodeResultPayload,decodeResultObject,normalizeShortCode,escapeHtml:esc,characterSceneStyle,textCard,listCard,
-      ensureResultShareTarget,
+      ensureResultShareTarget,saveAnswerAt,previousQuestionIndex,
       setResultForTest:result=>{state.result=result;pendingShortResultUrl=null}
     };
     return;
