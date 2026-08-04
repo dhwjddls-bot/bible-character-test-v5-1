@@ -1,4 +1,4 @@
-# 성경인물 성향 테스트 V5.1
+# 성경인물 성향 테스트 V5.2 · 100인 확장판
 
 설치 없이 실행되며 GitHub Pages에 올릴 수 있는 정적 웹앱입니다. 검사는 서버 설정 없이도 동작하고, 선택 사항인 로그인·기록 기능은 Supabase를 연결하면 활성화됩니다.
 
@@ -22,26 +22,30 @@ bible-character-test-v5.1/
 ├─ history.js              시간선 변화 분석
 ├─ data/
 │  ├─ questions.js         질문과 선택지, 성향 점수
-│  └─ characters.js        성경인물 프로필과 결과 설명
+│  ├─ scoring.js           균형 출제와 매칭 계산
+│  ├─ characters.js        기존 12인 상세 결과
+│  ├─ characters-existing-metadata.js
+│  └─ characters-expanded-*.js  88인 확장 결과 데이터
 ├─ assets/
-   ├─ characters-1.png     다윗·모세·요셉·에스더 장면
-   ├─ characters-2.png     베드로·바울·룻·느헤미야 장면
-   └─ characters-3.png     다니엘·예레미야·마리아·마르다 장면
+   └─ characters-1.png … characters-25.png  100인 시네마틱 장면
 ├─ supabase/
-│  ├─ schema.sql           사용자별 검사 기록과 보안 규칙
+│  ├─ schema.sql           사용자별 검사 기록, 100인 목록과 보안 규칙
+│  ├─ migrations/          기존 서비스의 데이터베이스 갱신 파일
 │  └─ functions/           Naver 프로필 형식 변환 함수
 └─ docs/
-   └─ ACCOUNT_SETUP.md     Google·Naver·Kakao 설정 방법
+   ├─ ACCOUNT_SETUP.md     Google·Naver·Kakao 설정 방법
+   └─ CUSTOM_DOMAIN.md     원하는 주소 연결 방법
 ```
 
 ## 수정 안내
 
 - 질문 문장을 바꾸거나 추가하려면 `data/questions.js`를 수정합니다.
-- 인물 설명, 성향 프로필, 관련 성경 장면을 바꾸려면 `data/characters.js`를 수정합니다.
+- 인물 설명, 성향 프로필, 관련 성경 장면을 바꾸려면 `data/characters*.js`를 수정합니다.
 - 문의 버튼은 결과 요약이 포함된 새 메일 작성 화면을 엽니다. 운영 이메일을 정했다면 `app.js`의 `mailto:` 뒤에 주소를 넣을 수 있습니다.
 - 결과 화면의 MBTI와 애니어그램 표시는 이해를 돕는 참고 정보이며 공식 판정이 아닙니다.
 - 결과 이미지 저장은 대표 장면뿐 아니라 상세 결과 전체를 긴 PNG 한 장으로 저장합니다.
 - 공유 주소에는 결과 인물과 점수만 들어가며 원문 답변, 이메일, 타인 이름은 포함하지 않습니다.
+- 첫 화면과 로그인 화면의 ‘테스트 공유하기’는 시작 주소를, 결과 화면의 ‘공유하기’는 같은 결과가 열리는 주소를 공유합니다.
 
 ## 로그인·기록 기능
 
@@ -52,6 +56,9 @@ Google·Naver·Kakao 로그인과 시간선 기록을 사용하려면 [docs/ACCO
 - 타인 테스트의 이름·관계·결과는 서버에 저장하지 않습니다.
 - 사용자는 자기 기록만 조회·삭제할 수 있습니다.
 - 2회 이상 기록되면 성향 점수 변화 그래프를 제공하고, 3회 미만은 추세가 아닌 최근 관찰로 안내합니다.
+- 100인 채점 기준과 이전 12인 채점 기준은 변화 그래프에서 섞지 않습니다.
+
+기존 12인 버전의 데이터베이스를 이미 만들었다면 `supabase/migrations/20260804_expand_character_catalog.sql`을 SQL Editor에서 한 번 실행해야 새 인물 결과도 저장됩니다.
 
 ## 참고
 
@@ -60,3 +67,4 @@ Google·Naver·Kakao 로그인과 시간선 기록을 사용하려면 [docs/ACCO
 - 3지선다 문항은 선택한 문항 수의 약 10%가 포함됩니다.
 - 타인 테스트 결과는 관찰자의 경험을 바탕으로 한 참고용 결과입니다.
 - 이 콘텐츠는 임상 심리검사나 신앙 평가가 아닙니다.
+- 결과 인물은 총 100명이며, 잘 알려진 인물뿐 아니라 본문 속 선택이 뚜렷한 발견형 인물도 포함합니다.

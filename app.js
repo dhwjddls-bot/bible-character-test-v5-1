@@ -1,13 +1,14 @@
 (function(){
   const app=document.getElementById("app");
-  const dims=["courage","empathy","planning","duty","emotion","leadership","faith","adapt","calm","justice","service","reflection"];
+  const Scoring=window.BibleScoring;
+  if(!Scoring) throw new Error("채점 모듈을 불러오지 못했습니다.");
+  const dims=Scoring.DIMENSIONS;
   const dimNames={courage:"용기",empathy:"공감",planning:"계획",duty:"책임",emotion:"감정 표현",leadership:"리더십",faith:"신념",adapt:"변화 수용",calm:"평정",justice:"정의감",service:"섬김",reflection:"성찰"};
-  let state={mode:"self",name:"",relation:"",count:32,questions:[],index:0,scores:Object.fromEntries(dims.map(d=>[d,0])),answers:[]};
+  let state={mode:"self",name:"",relation:"",count:32,questions:[],index:0,responses:[],answers:[]};
   let accountState={configured:false,initialized:false,user:null};
   let currentView="boot";
   let pendingResultSave=null;
   let failedResultSave=null;
-  const shuffle=a=>a.map(v=>[Math.random(),v]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
   const esc=s=>String(s||"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
   const hasFinalConsonant=word=>{
     const text=String(word||""),code=text.charCodeAt(text.length-1);
@@ -21,12 +22,66 @@
     try{const A=window.AudioContext||window.webkitAudioContext,c=new A(),o=c.createOscillator(),g=c.createGain();o.frequency.value=tone;o.type="sine";g.gain.setValueAtTime(.035,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.1);o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.1)}catch(e){}
   };
   const characterById=id=>CHARACTERS.find(c=>c.id===id);
+  const tierLabels={famous:"잘 알려진 인물",known:"알아갈 인물",discovery:"새롭게 만난 인물"};
+  const allowedScenePositions=new Set(["0% 0%","100% 0%","0% 100%","100% 100%"]);
+  const characterContext=c=>{
+    const testament=c.testament==="OT"?"구약":c.testament==="NT"?"신약":"성경";
+    return [testament,...(Array.isArray(c.books)?c.books:[])].join(" · ");
+  };
+  const characterSceneStyle=c=>{
+    const atlas=Number.isInteger(c&&c.atlas)&&c.atlas>=1&&c.atlas<=99?c.atlas:1;
+    const position=allowedScenePositions.has(c&&c.pos)?c.pos:"0% 0%";
+    return `background-image:url('assets/characters-${atlas}.png');background-position:${position}`;
+  };
+  function runnerComparison(top,runner){
+    const topTraits=new Set(top.traits||[]);
+    const shared=(runner.traits||[]).filter(trait=>topTraits.has(trait));
+    const distinct=(runner.traits||[]).filter(trait=>!topTraits.has(trait));
+    const sharedText=shared.length?`${shared.slice(0,2).join(" · ")}에서 닮았고`:"비슷한 선택 흐름을 보이지만";
+    const distinctText=distinct.length?`${distinct.slice(0,2).join(" · ")}의 색이 더 뚜렷합니다.`:"상황에 따라 표현 방식이 달라집니다.";
+    return `${sharedText}, ${distinctText}`;
+  }
   const makeClientResultId=()=>window.crypto&&window.crypto.randomUUID?window.crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const authProviderMeta={
     google:{mark:"G",label:"Google로 계속하기"},
     naver:{mark:"N",label:"Naver로 계속하기"},
     kakao:{mark:"K",label:"Kakao로 계속하기"}
   };
+  function siteShareUrl(){
+    const configured=window.APP_CONFIG&&typeof window.APP_CONFIG.siteUrl==="string"?window.APP_CONFIG.siteUrl.trim():"";
+    try{
+      const url=new URL(configured||location.href,location.href);
+      url.search="";url.hash="";
+      return url.href;
+    }catch(e){
+      try{
+        const fallback=new URL(location.href);
+        fallback.search="";fallback.hash="";
+        return fallback.href;
+      }catch(fallbackError){return String(location.href||"").split(/[?#]/)[0]}
+    }
+  }
+  function updateSiteMetadata(){
+    const url=siteShareUrl(),canonical=document.querySelector('link[rel="canonical"]'),ogUrl=document.querySelector('meta[property="og:url"]');
+    if(canonical) canonical.href=url;
+    if(ogUrl) ogUrl.content=url;
+  }
+  async function shareSite(){
+    const title="성경인물 성향 테스트";
+    const text="일상 속 선택을 따라가며 나와 닮은 성경인물을 만나보세요.";
+    const url=siteShareUrl();
+    try{
+      if(navigator.share) await navigator.share({title,text,url});
+      else {await copyText(`${text}\n${url}`);toast("테스트 주소를 복사했습니다.");}
+    }catch(e){
+      if(e&&e.name==="AbortError") return;
+      try{await copyText(`${text}\n${url}`);toast("테스트 주소를 복사했습니다.");}
+      catch(copyError){toast("주소를 복사하지 못했습니다. 다시 시도해 주세요.");}
+    }
+  }
+  function wireSiteShare(){
+    app.querySelectorAll("[data-share-site]").forEach(button=>button.onclick=()=>{buttonSound(540);shareSite()});
+  }
   function accountPanel(){
     if(!accountState.configured) return "";
     if(!accountState.initialized) return `<div class="account-panel"><div><strong>내 기록 연결 확인 중</strong><span>테스트는 바로 시작할 수 있습니다.</span></div></div>`;
@@ -51,20 +106,7 @@
     };
   }
   function selectQuestions(count){
-    const cats=[...new Set(QUESTIONS.map(q=>q.category))], triTarget=Math.round(count*.1);
-    const byCat=Object.fromEntries(cats.map(c=>[c,shuffle(QUESTIONS.filter(q=>q.category===c))]));
-    const chosen=[], triCats=shuffle(cats).slice(0,triTarget);
-    triCats.forEach(c=>{const i=byCat[c].findIndex(q=>q.options.length===3);if(i>=0)chosen.push(byCat[c].splice(i,1)[0])});
-    let cursor=0;
-    while(chosen.length<count){
-      const c=cats[cursor%cats.length], pool=byCat[c];
-      const i=pool.findIndex(q=>q.options.length===2);
-      if(i>=0) chosen.push(pool.splice(i,1)[0]);
-      else if(pool.length) chosen.push(pool.shift());
-      cursor++;
-      if(cursor>1000)break;
-    }
-    return shuffle(chosen);
+    return Scoring.selectQuestions(QUESTIONS,count,{dimensions:dims});
   }
   function home(){
     currentView="home";
@@ -77,9 +119,11 @@
         <button class="choice-card" data-mode="other"><strong>다른 사람을 떠올리며</strong><span>가까이에서 지켜본 한 사람을 생각하며 답합니다.</span></button>
       </div>
       ${accountPanel()}
+      <div class="entry-share-wrap"><button class="entry-share" type="button" data-share-site aria-label="성경인물 성향 테스트 공유하기"><span aria-hidden="true">↗</span><span>테스트 공유하기</span></button></div>
     </div></section>`;
     app.querySelectorAll("[data-mode]").forEach(b=>b.onclick=()=>{buttonSound();state.mode=b.dataset.mode;setup()});
     wireAccountPanel();
+    wireSiteShare();
   }
   function showLogin(){
     currentView="login";
@@ -94,8 +138,10 @@
       </div>
       ${enabledProviders.length?"":`<p class="record-status">현재 사용할 수 있는 로그인 방식이 없습니다. 잠시 후 다시 확인해 주세요.</p>`}
       <p class="note">로그인 제공자는 본인 확인에만 사용합니다. 소셜 서비스의 게시물이나 연락처에는 접근하지 않습니다.</p>
+      <div class="login-share"><button class="entry-share" type="button" data-share-site aria-label="성경인물 성향 테스트 공유하기"><span aria-hidden="true">↗</span><span>테스트 공유하기</span></button></div>
     </div></section>`;
     app.querySelector("#back").onclick=home;
+    wireSiteShare();
     app.querySelectorAll("[data-provider]").forEach(button=>button.onclick=async()=>{
       buttonSound(560);
       const buttons=[...app.querySelectorAll("[data-provider]")];
@@ -120,6 +166,7 @@
       ${state.mode==="other"?`<div class="field"><label for="person">이름 또는 별칭</label><input id="person" maxlength="20" placeholder="예: 민수, 우리 팀장"></div><div class="field"><label for="relation">나와의 관계</label><input id="relation" maxlength="20" placeholder="예: 친구, 가족, 동료"></div>`:""}
       <p>문항 수가 많을수록 여러 상황에서의 선택을 폭넓게 살펴봅니다.</p>
       <div class="length-grid">${[16,32,48,64].map(n=>`<button class="length-card ${n===state.count?"selected":""}" data-count="${n}">${n}문항</button>`).join("")}</div>
+      ${state.count===16?`<p class="length-note"><b>16문항은 빠른 탐색입니다.</b> 지금의 큰 흐름을 먼저 보고, 더 세밀한 구분은 32문항 이상에서 확인할 수 있습니다.</p>`:""}
       <button class="primary wide" id="start">테스트 시작</button>
       ${state.mode==="other"?`<p class="note">이 결과는 그 사람의 자기보고가 아니라, 관찰자의 경험을 바탕으로 한 참고용 결과입니다.</p>`:""}
     </div></section>`;
@@ -130,7 +177,7 @@
         state.name=app.querySelector("#person").value.trim();state.relation=app.querySelector("#relation").value.trim();
         if(!state.name){toast("이름이나 별칭을 입력해 주세요.");return}
       }
-      buttonSound(620);state.questions=selectQuestions(state.count);state.index=0;state.scores=Object.fromEntries(dims.map(d=>[d,0]));state.answers=[];question();
+      buttonSound(620);state.questions=selectQuestions(state.count);state.index=0;state.responses=[];state.answers=[];question();
     };
   }
   function question(){
@@ -142,23 +189,20 @@
       <div class="options">${q.options.map((o,i)=>`<button class="option" data-i="${i}"><b>${String.fromCharCode(65+i)}</b><span>${esc(o.text)}</span></button>`).join("")}</div></div>
     </section>`;
     app.querySelectorAll("[data-i]").forEach(b=>b.onclick=()=>{
-      buttonSound(460+(+b.dataset.i*80));const o=q.options[+b.dataset.i];
-      Object.entries(o.scores).forEach(([k,v])=>state.scores[k]+=v);
+      buttonSound(460+(+b.dataset.i*80));const optionIndex=+b.dataset.i,o=q.options[optionIndex];
+      state.responses.push({question:q,optionIndex});
       state.answers.push({question:q.text,answer:o.text});state.index++;
       state.index<state.count?question():showResult();
     });
   }
   function calculate(){
-    const vals=dims.map(d=>state.scores[d]), min=Math.min(...vals), max=Math.max(...vals);
-    const normalized=Object.fromEntries(dims.map(d=>[d, max===min?65:35+((state.scores[d]-min)/(max-min))*60]));
-    const ranked=CHARACTERS.map(c=>{
-      const distance=Math.sqrt(dims.reduce((s,d)=>s+Math.pow(normalized[d]-c.profile[d],2),0)/dims.length);
-      return {c,score:Math.max(55,Math.min(97,Math.round(100-distance*.72)))};
-    }).sort((a,b)=>b.score-a.score);
-    return {ranked,normalized};
+    const scored=Scoring.scoreResponses(state.responses,{dimensions:dims});
+    const ranked=Scoring.rankCharacters(scored.traits,CHARACTERS,{dimensions:dims,reliability:scored.reliability});
+    return {ranked,normalized:scored.traits,reliability:scored.reliability,scoringVersion:Scoring.SCORING_VERSION};
   }
   function showResult(sharedResult){
-    const result=sharedResult||calculate(), ranked=result.ranked.slice(0,3), normalized=result.normalized||null, top=ranked[0],c=top.c;
+    const result=sharedResult||calculate(), allRanked=result.ranked,ranked=allRanked.slice(0,3), normalized=result.normalized||null, top=ranked[0],c=top.c;
+    const discoveryMatch=result.discoveryMatch||(c.tier!=="discovery"?allRanked.slice(3,15).find(item=>item.c.tier==="discovery"&&top.score-item.score<=4):null)||null;
     currentView="result";
     state.result={
       ranked,
@@ -169,29 +213,34 @@
       storedId:result.storedId||null,
       mode:result.shared?"shared":result.history?"self":state.mode,
       questionCount:result.questionCount||state.count,
-      scoringVersion:result.scoringVersion||"v5.1",
+      scoringVersion:result.scoringVersion||Scoring.SCORING_VERSION,
       questionBankVersion:result.questionBankVersion||"v5.1",
+      reliability:result.reliability||null,
+      discoveryMatch,
       clientResultId:result.clientResultId||makeClientResultId()
     };
-    const answerLabel=state.result.shared?"공유된 결과":state.result.history?"이 기록의 답":state.mode==="other"?`${esc(state.name)}님의 답`:"당신의 답";
+    const answerLabel=state.result.shared?"공유된 결과":state.result.history?"이 기록의 답":state.mode==="other"?`${state.name}님의 답`:"당신의 답";
     app.innerHTML=`<section class="screen result">
       ${state.result.shared?`<div class="shared-badge">공유된 결과</div>`:""}
-      <div class="scene" style="background-image:url('assets/characters-${c.atlas}.png');background-position:${c.pos}">
-        <div class="scene-title"><small>${top.score}% 닮은 흐름</small><h1>${c.name}</h1><strong>${c.subtitle}</strong></div>
+      <div class="scene" style="${characterSceneStyle(c)}">
+        <div class="scene-title"><small>${top.score}% 닮은 흐름 · ${esc(tierLabels[c.tier]||"성경 인물")}</small><h1>${esc(c.name)}</h1><strong>${esc(c.subtitle)}</strong></div>
       </div>
-      <p class="result-intro">${answerLabel}에서는 ${traitSubject(c.traits)} 함께 나타났습니다. ${c.intro}</p>
-      <div class="panel" style="margin-bottom:15px"><div class="progress-row"><span>결과 일치도</span><b>${top.score}%</b></div><div class="match-bar"><i style="width:${top.score}%"></i></div><div class="traits">${c.traits.map(t=>`<span class="pill">${t}</span>`).join("")}</div></div>
+      <div class="result-context"><span>${esc(characterContext(c))}</span>${c.archetype?`<span>${esc(c.archetype)}</span>`:""}</div>
+      ${c.named===false?`<p class="unnamed-note">${esc(c.unnamedNote||"성경에 이름은 기록되지 않았습니다.")}</p>`:""}
+      ${c.tier==="discovery"?`<aside class="discovery-note"><b>이 인물이 낯설다면</b><p>잘 알려진 이름은 아니지만, 성경에 기록된 선택과 행동이 당신의 응답과 가까웠습니다. 아래 장면을 따라가면 이 인물이 왜 결과로 나왔는지 더 선명하게 볼 수 있습니다.</p></aside>`:""}
+      <p class="result-intro">${esc(answerLabel)}에서는 ${esc(traitSubject(c.traits))} 함께 나타났습니다. ${esc(c.intro)}</p>
+      <div class="panel" style="margin-bottom:15px"><div class="progress-row"><span>결과 일치도</span><b>${top.score}%</b></div><div class="match-bar"><i style="width:${top.score}%"></i></div><div class="traits">${c.traits.map(t=>`<span class="pill">${esc(t)}</span>`).join("")}</div>${state.result.questionCount<=16?`<p class="stability-note">16문항 결과는 현재의 큰 흐름을 빠르게 보는 버전입니다. 더 세밀한 구분을 원하면 32문항 이상으로 다시 해보세요.</p>`:""}</div>
       <div class="report-grid">
-        ${card("이 인물의 이야기",c.story,"full")}
-        ${card("관계에서 보이는 모습",c.relation)}
-        ${card("당신이 가진 힘",c.strength)}
-        ${card("강점이 지나칠 때",c.shadow)}
-        ${card("압박받을 때",c.pressure)}
-        ${card("공동체에서 맡기 쉬운 역할",`<ul>${c.role.map(x=>`<li>${x}</li>`).join("")}</ul>`)}
-        ${card("성장을 위한 균형",c.growth)}
-        ${card("함께 읽어 볼 장면",`<ul>${c.scenes.map(x=>`<li>${x}</li>`).join("")}</ul>`,"full")}
-        <article class="report-card full"><h2>비슷하게 느껴질 수 있는 유형</h2><p><b>MBTI 참고:</b> ${c.mbti}</p><p><b>애니어그램 참고:</b> ${c.enneagram}</p><p class="note">성경인물에게 현대 성격유형을 공식적으로 부여한 것이 아니라, 결과를 이해하기 위한 비교입니다.</p></article>
-        <article class="report-card full"><h2>두 번째와 세 번째로 닮은 인물</h2><div class="runners">${ranked.slice(1,3).map((r,i)=>`<div class="runner"><small>${i+2}번째 · ${r.score}%</small><strong>${r.c.name}</strong><span>${r.c.traits.slice(0,3).join(" · ")}</span></div>`).join("")}</div></article>
+        ${textCard("이 인물의 이야기",c.story,"full")}
+        ${textCard("관계에서 보이는 모습",c.relation)}
+        ${textCard("당신이 가진 힘",c.strength)}
+        ${textCard("강점이 지나칠 때",c.shadow)}
+        ${textCard("압박받을 때",c.pressure)}
+        ${listCard("공동체에서 맡기 쉬운 역할",c.role)}
+        ${textCard("성장을 위한 균형",c.growth)}
+        ${listCard("함께 읽어 볼 장면",c.scenes,"full")}
+        <article class="report-card full"><h2>비슷하게 느껴질 수 있는 유형</h2><p><b>MBTI 참고:</b> ${esc(c.mbti)}</p><p><b>애니어그램 참고:</b> ${esc(c.enneagram)}</p><p class="note">성경인물에게 현대 성격유형을 공식적으로 부여한 것이 아니라, 결과를 이해하기 위한 비교입니다.</p></article>
+        <article class="report-card full"><h2>두 번째와 세 번째로 닮은 인물</h2><div class="runners">${ranked.slice(1,3).map((r,i)=>`<div class="runner"><small>${i+2}번째 · ${r.score}% · ${esc(tierLabels[r.c.tier]||"성경 인물")}${r.c.named===false?" · 이름 미기록":""}</small><strong>${esc(r.c.name)}</strong><span>${r.c.traits.slice(0,3).map(esc).join(" · ")}</span><p>${esc(runnerComparison(c,r.c))}</p></div>`).join("")}</div>${discoveryMatch?`<div class="unexpected-match"><small>한 사람 더 알아보기 · ${discoveryMatch.score}%${discoveryMatch.c.named===false?" · 이름 미기록":""}</small><strong>${esc(discoveryMatch.c.name)}</strong><p>${discoveryMatch.c.named===false?`${esc(discoveryMatch.c.unnamedNote||"성경에 이름은 기록되지 않았습니다.")} `:""}${esc(discoveryMatch.c.subtitle)} 성향의 거리는 상위 결과와 가깝지만, 대표 장면과 역할은 또 다른 방향을 보여 줍니다.</p></div>`:""}</article>
       </div>
       <div class="actions">
         <button class="primary" id="save">전체 결과 이미지 저장</button>
@@ -201,12 +250,12 @@
         <button class="secondary" id="email">이메일 문의</button>
       </div>
       ${resultRecordStatus()}
-      <p class="note">이 테스트는 자기이해를 돕는 참여형 콘텐츠이며 심리검사나 신앙 평가가 아닙니다.</p>
+      <p class="note">이 테스트는 자기이해를 돕는 참여형 콘텐츠이며 심리검사나 신앙 평가가 아닙니다.<br>인물 이미지는 성경의 시대·지역 배경을 참고한 창작 장면이며 실제 초상이 아닙니다.</p>
     </section>`;
     app.querySelector("#restart").onclick=()=>{buttonSound();clearSharedResult();home()};
-    app.querySelector("#share").onclick=()=>shareResult();
-    app.querySelector("#save").onclick=saveImage;
-    app.querySelector("#email").onclick=()=>emailResult(c,top.score);
+    app.querySelector("#share").onclick=()=>{buttonSound(540);shareResult()};
+    app.querySelector("#save").onclick=()=>{buttonSound(500);saveImage()};
+    app.querySelector("#email").onclick=()=>{buttonSound(460);emailResult(c,top.score)};
     const resultHistory=app.querySelector("#result-history");
     if(resultHistory) resultHistory.onclick=showHistory;
     persistResultIfNeeded();
@@ -259,21 +308,22 @@
         if(!response.saved) throw new Error("기록을 다시 저장하지 못했습니다.");
         failedResultSave=null;
       }
-      const rows=(await AccountService.listResults()).filter(row=>characterById(row.primary_character));
-      renderHistory(rows);
+      const allRows=(await AccountService.listResults()).filter(row=>characterById(row.primary_character));
+      const rows=allRows.filter(row=>row.scoring_version===Scoring.SCORING_VERSION);
+      renderHistory(rows,allRows.length-rows.length);
     }catch(e){
       app.innerHTML=`<section class="screen setup"><div class="panel"><button class="back" id="back">← 처음으로</button><h1 style="font-size:clamp(34px,6vw,54px)">기록을 불러오지 못했습니다</h1><p>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</p><button class="primary" id="retry">다시 불러오기</button></div></section>`;
       app.querySelector("#back").onclick=home;
       app.querySelector("#retry").onclick=showHistory;
     }
   }
-  function renderHistory(rows){
+  function renderHistory(rows,legacyCount=0){
     currentView="history";
     const analysis=HistoryInsights.analyze(rows,dims,dimNames);
     if(!analysis.count){
       app.innerHTML=`<section class="screen history-screen">
         <button class="back" id="back">← 처음으로</button>
-        <div class="panel empty-history"><div class="eyebrow">MY TIMELINE</div><h1 style="font-size:clamp(38px,6vw,58px)">첫 기록을 남겨 보세요</h1><p>로그인한 상태에서 ‘나를 위한 테스트’를 마치면 이곳에 결과가 쌓입니다.</p><button class="primary" id="new-test">테스트 시작</button></div>
+        <div class="panel empty-history"><div class="eyebrow">MY TIMELINE</div><h1 style="font-size:clamp(38px,6vw,58px)">첫 기록을 남겨 보세요</h1><p>로그인한 상태에서 ‘나를 위한 테스트’를 마치면 이곳에 결과가 쌓입니다.</p>${legacyCount?`<p class="version-notice">이전 채점 기준으로 저장된 기록 ${legacyCount}건은 100인 기준의 변화 그래프에 섞지 않았습니다. 기록은 서버에서 삭제되지 않았습니다.</p>`:""}<button class="primary" id="new-test">테스트 시작</button></div>
       </section>`;
       app.querySelector("#back").onclick=home;
       app.querySelector("#new-test").onclick=()=>{state.mode="self";setup()};
@@ -296,16 +346,17 @@
         <div class="eyebrow">MY TIMELINE</div>
         <h1>시간에 따라<br>달라진 나의 선택</h1>
         <p class="lead">${esc(AccountService.getDisplayName())}님의 검사 ${analysis.count}회를 성격의 판정이 아닌, 시기별 응답 경향으로 살펴봅니다.</p>
+        ${legacyCount?`<p class="version-notice">이전 채점 기준의 기록 ${legacyCount}건은 비교 기준이 달라 이 그래프에 섞지 않았습니다. 서버 기록은 그대로 보존됩니다.</p>`:""}
       </div>
       <div class="history-summary">
-        <article><small>최근 닮은 인물</small><strong>${latestCharacter.name}</strong><span>${formatDate(latest.tested_at)} · ${latest.primary_score}%</span></article>
-        <article><small>꾸준히 높게 나타난 성향</small><strong>${strongest.name}</strong><span>평균 ${Math.round(strongest.average)}점</span></article>
-        <article><small>${trendLabel}에서 가장 큰 차이</small><strong>${analysis.count<2?"비교 준비 중":changed.name}</strong><span>${changeText}</span></article>
-        <article><small>가장 자주 닮은 인물</small><strong>${frequentCharacter?frequentCharacter.name:"—"}</strong><span>${frequent?`${frequent[1]}회`:"기록 없음"}${analysis.count>1?` · 안정적 성향 ${stable.name}`:""}</span></article>
+        <article><small>최근 닮은 인물</small><strong>${esc(latestCharacter.name)}</strong><span>${formatDate(latest.tested_at)} · ${latest.primary_score}%</span></article>
+        <article><small>꾸준히 높게 나타난 성향</small><strong>${esc(strongest.name)}</strong><span>평균 ${Math.round(strongest.average)}점</span></article>
+        <article><small>${trendLabel}에서 가장 큰 차이</small><strong>${analysis.count<2?"비교 준비 중":esc(changed.name)}</strong><span>${esc(changeText)}</span></article>
+        <article><small>가장 자주 닮은 인물</small><strong>${frequentCharacter?esc(frequentCharacter.name):"—"}</strong><span>${frequent?`${frequent[1]}회`:"기록 없음"}${analysis.count>1?` · 안정적 성향 ${esc(stable.name)}`:""}</span></article>
       </div>
       ${analysis.count>1?`<article class="panel trend-panel"><div class="section-heading"><div><small>성향 점수의 흐름</small><h2>높고 낮음보다 움직임을 보세요</h2></div><span>${formatDate(analysis.first.tested_at)} — ${formatDate(analysis.latest.tested_at)}</span></div>${HistoryInsights.chartSvg(analysis,dimNames)}</article>`:""}
       <div class="history-grid">
-        <article class="report-card"><h2>이번 흐름에서 살펴볼 점</h2><ul>${analysis.suggestions.map(text=>`<li>${text}</li>`).join("")}</ul></article>
+        <article class="report-card"><h2>이번 흐름에서 살펴볼 점</h2><ul>${analysis.suggestions.map(text=>`<li>${esc(text)}</li>`).join("")}</ul></article>
         <article class="report-card"><h2>해석할 때 기억할 점</h2><p>점수 차이는 생활 환경, 최근 경험, 문항 수와 답할 때의 마음에 따라 달라질 수 있습니다. 한 번의 오르내림을 성장이나 퇴보로 단정하지 말고, 실제 생활에서 반복되는 장면과 함께 살펴보세요.</p></article>
       </div>
       <div class="timeline-heading"><div><small>검사 기록</small><h2>최근 결과부터 보기</h2></div><button class="text-button danger" id="delete-all">전체 기록 삭제</button></div>
@@ -313,7 +364,7 @@
         const character=characterById(row.primary_character);
         return `<article class="timeline-item">
           <div class="timeline-date"><strong>${formatDate(row.tested_at)}</strong><span>${row.question_count}문항</span></div>
-          <div class="timeline-character"><small>${row.primary_score}% 닮은 흐름</small><strong>${character.name}</strong><span>${character.traits.slice(0,3).join(" · ")}</span></div>
+          <div class="timeline-character"><small>${row.primary_score}% 닮은 흐름</small><strong>${esc(character.name)}</strong><span>${character.traits.slice(0,3).map(esc).join(" · ")}</span></div>
           <div class="timeline-actions"><button class="secondary" data-view="${esc(row.id)}">결과 보기</button><button class="text-button danger" data-delete="${esc(row.id)}">삭제</button></div>
         </article>`;
       }).join("")}</div>
@@ -355,10 +406,12 @@
     };
     scrollTo({top:0,behavior:"smooth"});
   }
-  const card=(title,body,cls="")=>`<article class="report-card ${cls}"><h2>${title}</h2>${body.startsWith("<")?body:`<p>${body}</p>`}</article>`;
+  const textCard=(title,body,cls="")=>`<article class="report-card ${cls}"><h2>${esc(title)}</h2><p>${esc(body)}</p></article>`;
+  const listCard=(title,items,cls="")=>`<article class="report-card ${cls}"><h2>${esc(title)}</h2><ul>${(Array.isArray(items)?items:[]).map(item=>`<li>${esc(item)}</li>`).join("")}</ul></article>`;
   function encodeResultPayload(){
     if(!state.result||!Array.isArray(state.result.ranked)) return "";
-    const payload={v:1,r:state.result.ranked.slice(0,3).map(({c,score})=>[c.id,Math.round(score)])};
+    const discovery=state.result.discoveryMatch;
+    const payload={v:2,s:state.result.scoringVersion||Scoring.SCORING_VERSION,q:state.result.questionCount||null,r:state.result.ranked.slice(0,3).map(({c,score})=>[c.id,Math.round(score)]),d:discovery?[discovery.c.id,Math.round(discovery.score)]:null};
     const bytes=new TextEncoder().encode(JSON.stringify(payload));
     let binary="";
     bytes.forEach(byte=>binary+=String.fromCharCode(byte));
@@ -366,23 +419,31 @@
   }
   function decodeResultPayload(raw){
     try{
-      if(!raw||raw.length>1200) return null;
+      if(!raw||raw.length>1200||!/^[A-Za-z0-9_-]+$/.test(raw)) return null;
       const normalizedRaw=raw.replace(/-/g,"+").replace(/_/g,"/");
       const padded=normalizedRaw+"=".repeat((4-normalizedRaw.length%4)%4);
       const binary=atob(padded),bytes=Uint8Array.from(binary,ch=>ch.charCodeAt(0));
       const payload=JSON.parse(new TextDecoder().decode(bytes));
-      if(!payload||payload.v!==1||!Array.isArray(payload.r)||payload.r.length!==3) return null;
+      if(!payload||typeof payload!=="object"||![1,2].includes(payload.v)||!Array.isArray(payload.r)||payload.r.length!==3) return null;
+      if(payload.v===2&&(![16,32,48,64].includes(payload.q)||typeof payload.s!=="string"||!/^[A-Za-z0-9._-]{1,30}$/.test(payload.s))) return null;
       const known=new Map(CHARACTERS.map(c=>[c.id,c])), seen=new Set(), ranked=[];
       for(const row of payload.r){
         if(!Array.isArray(row)||row.length!==2||typeof row[0]!=="string"||!Number.isInteger(row[1])||row[1]<0||row[1]>100||seen.has(row[0])||!known.has(row[0])) return null;
         seen.add(row[0]);ranked.push({c:known.get(row[0]),score:row[1]});
       }
       if(ranked.some((item,index)=>index>0&&item.score>ranked[index-1].score)) return null;
-      return {ranked,normalized:null,createdAt:null,shared:true};
+      let discoveryMatch=null;
+      if(payload.v===2&&payload.d!=null){
+        if(!Array.isArray(payload.d)||payload.d.length!==2||typeof payload.d[0]!=="string"||!Number.isInteger(payload.d[1])||payload.d[1]<0||payload.d[1]>100||seen.has(payload.d[0])||!known.has(payload.d[0])) return null;
+        const discoveryCharacter=known.get(payload.d[0]);
+        if(ranked[0].c.tier==="discovery"||discoveryCharacter.tier!=="discovery"||payload.d[1]>ranked[2].score||ranked[0].score-payload.d[1]>4) return null;
+        discoveryMatch={c:discoveryCharacter,score:payload.d[1]};
+      }
+      return {ranked,normalized:null,createdAt:null,shared:true,discoveryMatch,scoringVersion:payload.v===2?payload.s:"v5.1",questionCount:payload.v===2?payload.q:null};
     }catch(e){return null}
   }
   function resultShareUrl(){
-    const encoded=encodeResultPayload(),url=new URL(location.href);
+    const encoded=encodeResultPayload(),url=new URL(siteShareUrl(),location.href);
     url.hash=encoded?`result=${encoded}`:"";
     return url.href;
   }
@@ -392,20 +453,24 @@
   async function shareResult(){
     if(!state.result) return;
     const {c,score}=state.result.ranked[0];
-    const who=state.result.shared?"공유된":state.mode==="other"?"떠올린 사람의":"나의";
+    const who=state.result.shared?"공유된":state.result.mode==="other"?"떠올린 사람의":"나의";
     const text=`${who} 성경인물 성향 테스트 결과는 ${c.name} (${score}%)입니다. — ${c.subtitle}`;
     const url=resultShareUrl();
     try{
       if(navigator.share) await navigator.share({title:"성경인물 성향 테스트",text,url});
       else {await copyText(`${text}\n${url}`);toast("같은 결과가 열리는 주소를 복사했습니다.");}
-    }catch(e){if(e&&e.name!=="AbortError"){await copyText(`${text}\n${url}`);toast("같은 결과가 열리는 주소를 복사했습니다.");}}
+    }catch(e){
+      if(e&&e.name==="AbortError") return;
+      try{await copyText(`${text}\n${url}`);toast("같은 결과가 열리는 주소를 복사했습니다.");}
+      catch(copyError){toast("결과 주소를 복사하지 못했습니다. 다시 시도해 주세요.");}
+    }
   }
   async function copyText(text){
     if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(text);return}
     const area=document.createElement("textarea");area.value=text;area.style.position="fixed";area.style.opacity="0";document.body.appendChild(area);area.select();document.execCommand("copy");area.remove();
   }
   function emailResult(c,score){
-    const who=state.mode==="other"?`${state.name}님의`:"나의";
+    const who=state.result&&state.result.shared?"공유된":state.result&&state.result.mode==="other"?`${state.name}님의`:"나의";
     const subject=encodeURIComponent("성경인물 성향 테스트 문의");
     const body=encodeURIComponent(`안녕하세요.\n\n${who} 테스트 결과는 ${c.name} (${score}%)입니다.\n문의 내용: \n\n`);
     location.href=`mailto:?subject=${subject}&body=${body}`;
@@ -437,8 +502,14 @@
     ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();
   }
   function reportBlocks(c,ranked){
+    const storyParagraphs=[];
+    storyParagraphs.push([tierLabels[c.tier]||"성경 인물",characterContext(c),c.archetype||""].filter(Boolean).join(" · "));
+    if(c.named===false) storyParagraphs.push(c.unnamedNote||"성경에 이름은 기록되지 않았습니다.");
+    if(c.tier==="discovery") storyParagraphs.push("잘 알려진 이름은 아니지만, 성경에 기록된 선택과 행동이 이번 응답과 가까웠습니다.");
+    if(state.result&&state.result.questionCount<=16) storyParagraphs.push("16문항 결과는 현재의 큰 흐름을 빠르게 살펴본 결과입니다. 더 세밀한 구분은 32문항 이상에서 확인할 수 있습니다.");
+    storyParagraphs.push(c.story);
     return [
-      {title:"이 인물의 이야기",paragraphs:[c.story]},
+      {title:`이 인물의 이야기 · ${characterContext(c)}`,paragraphs:storyParagraphs},
       {title:"관계에서 보이는 모습",paragraphs:[c.relation]},
       {title:"당신이 가진 힘",paragraphs:[c.strength]},
       {title:"강점이 지나칠 때",paragraphs:[c.shadow]},
@@ -447,7 +518,7 @@
       {title:"성장을 위한 균형",paragraphs:[c.growth]},
       {title:"함께 읽어 볼 장면",bullets:c.scenes},
       {title:"비슷하게 느껴질 수 있는 유형",paragraphs:[`MBTI 참고: ${c.mbti}`,`애니어그램 참고: ${c.enneagram}`,"성경인물에게 현대 성격유형을 공식적으로 부여한 것이 아니라, 결과를 이해하기 위한 비교입니다."]},
-      {title:"두 번째와 세 번째로 닮은 인물",paragraphs:ranked.slice(1,3).map((r,i)=>`${i+2}번째 · ${r.score}%  ${r.c.name} — ${r.c.traits.slice(0,3).join(" · ")}`)}
+      {title:"두 번째와 세 번째로 닮은 인물",paragraphs:[...ranked.slice(1,3).map((r,i)=>`${i+2}번째 · ${r.score}%  ${r.c.name}${r.c.named===false?" (이름 미기록)":""} — ${r.c.traits.slice(0,3).join(" · ")}. ${runnerComparison(c,r.c)}`),...(state.result&&state.result.discoveryMatch?[`한 사람 더 알아보기 · ${state.result.discoveryMatch.score}%  ${state.result.discoveryMatch.c.name}${state.result.discoveryMatch.c.named===false?" (이름 미기록)":""} — ${state.result.discoveryMatch.c.subtitle}`]:[])]}
     ];
   }
   function measureReportCard(ctx,block,width){
@@ -494,7 +565,7 @@
         const width=row.length===1?contentWidth:columnWidth;
         return {row,width,height:Math.max(...row.map(block=>measureReportCard(measure,block,width)))};
       });
-      const heroHeight=675,matchHeight=184,footerHeight=130;
+      const heroHeight=675,matchHeight=184,footerHeight=165;
       const reportHeight=rowMetrics.reduce((sum,row)=>sum+row.height,0)+gap*(rowMetrics.length-1);
       const canvasHeight=Math.ceil(heroHeight+42+introHeight+matchHeight+28+reportHeight+footerHeight);
       const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");canvas.width=canvasWidth;canvas.height=canvasHeight;
@@ -503,7 +574,7 @@
       const sourceWidth=img.naturalWidth/2,sourceHeight=img.naturalHeight/2,sx=c.pos.startsWith("100")?sourceWidth:0,sy=c.pos.endsWith("100%")?sourceHeight:0;
       ctx.drawImage(img,sx,sy,sourceWidth,sourceHeight,0,0,canvasWidth,heroHeight);
       const shade=ctx.createLinearGradient(0,260,0,heroHeight);shade.addColorStop(0,"rgba(0,0,0,0)");shade.addColorStop(1,"rgba(8,14,11,.91)");ctx.fillStyle=shade;ctx.fillRect(0,0,canvasWidth,heroHeight);
-      ctx.fillStyle="#f2d29c";ctx.font=imageFont(27,750);ctx.fillText(`${score}% 닮은 흐름`,62,510);
+      ctx.fillStyle="#f2d29c";ctx.font=imageFont(27,750);ctx.fillText(`${score}% 닮은 흐름 · ${tierLabels[c.tier]||"성경 인물"}`,62,510);
       ctx.fillStyle="#fff";ctx.font=imageFont(72,700,true);ctx.fillText(c.name,62,590);ctx.font=imageFont(27,600);ctx.fillText(c.subtitle,62,635);
       let y=heroHeight+42;
       ctx.fillStyle=imagePalette.ink;ctx.font=imageFont(31,500,true);ctx.textAlign="center";
@@ -520,7 +591,7 @@
         y+=height+(rowIndex===rowMetrics.length-1?0:gap);
       });
       y+=54;ctx.textAlign="center";ctx.fillStyle=imagePalette.muted;ctx.font=imageFont(19,500);
-      wrapCanvasText(ctx,"이 테스트는 자기이해를 돕는 참여형 콘텐츠이며 심리검사나 신앙 평가가 아닙니다.",contentWidth).forEach(line=>{ctx.fillText(line,canvasWidth/2,y);y+=30});
+      wrapCanvasText(ctx,"이 테스트는 자기이해를 돕는 참여형 콘텐츠이며 심리검사나 신앙 평가가 아닙니다.\n인물 이미지는 성경의 시대·지역 배경을 참고한 창작 장면이며 실제 초상이 아닙니다.",contentWidth).forEach(line=>{ctx.fillText(line,canvasWidth/2,y);y+=30});
       ctx.font=imageFont(16,700);ctx.fillText("BIBLE CHARACTER TEST",canvasWidth/2,y+20);ctx.textAlign="left";
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png"));
       if(!blob) throw new Error("이미지 변환 실패");
@@ -534,6 +605,7 @@
   }
   function toast(msg){const t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2200)}
   async function startApp(){
+    updateSiteMetadata();
     const authParams=new URLSearchParams(location.search);
     const authError=authParams.get("error_description")||authParams.get("error");
     if(window.AccountService){
@@ -565,6 +637,10 @@
         accountState={...accountState,initialized:true,user:null};
       });
     }
+  }
+  if(window.__BIBLE_APP_TEST__){
+    window.__BIBLE_APP_TEST_HOOKS__={decodeResultPayload,escapeHtml:esc,characterSceneStyle,textCard,listCard};
+    return;
   }
   startApp();
 })();

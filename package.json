@@ -1,0 +1,9 @@
+{
+  "name": "bible-character-test-v5-1",
+  "private": true,
+  "scripts": {
+    "test": "node tests/scoring.test.js && node tests/characters.test.js && node tests/app-contract.test.js",
+    "simulate": "node tests/scoring-simulation.js",
+    "recover": "node tests/profile-recovery.js"
+  }
+}
