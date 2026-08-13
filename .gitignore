@@ -1,1 +1,15 @@
 supabase/.temp/
+
+# 로컬 로그인·실행 정보
+.codex/
+.env
+.env.*
+!.env.example
+node_modules/
+auth.json
+*service-account*.json
+*.pem
+*.key
+
+# 사용자가 반려한 이전 램프 아이콘 시안은 로컬에만 보존합니다.
+assets/app-icon-variant-4-lamp.png

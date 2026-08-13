@@ -36,8 +36,15 @@ bible-character-test-v5.1/
 │  └─ functions/           Naver 프로필 변환·짧은 결과 링크 함수
 └─ docs/
    ├─ ACCOUNT_SETUP.md     Google·Naver·Kakao 설정 방법
-   └─ CUSTOM_DOMAIN.md     원하는 주소 연결 방법
+   ├─ CUSTOM_DOMAIN.md     원하는 주소 연결 방법
+   └─ WORKING_ACROSS_COMPUTERS.md  회사·집 작업 인계 방법
 ```
+
+앱 아이콘의 편집 가능한 고해상도 원본과 후보안은 `assets/app-icon-*.png`에 보관합니다. 사용자가 반려한 램프 시안은 저장소에 포함하지 않습니다.
+
+## 다른 컴퓨터에서 이어서 작업
+
+코드와 진행 상태는 개인 GitHub를 기준으로 공유합니다. 집 컴퓨터의 최초 설정, 매 작업 전후 순서와 새 Codex 대화에서 사용할 문장은 [docs/WORKING_ACROSS_COMPUTERS.md](docs/WORKING_ACROSS_COMPUTERS.md)에 정리되어 있습니다. 현재 구현 상태와 다음 할 일은 [HANDOFF.md](HANDOFF.md)를 기준으로 확인합니다.
 
 ## 수정 안내
 
